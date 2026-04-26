@@ -2045,20 +2045,44 @@ if [ -d "$SKILLS_DIR" ] && [ -f "$SKILLS_DIR/install-skills.sh" ]; then
     echo "  - Design: frontend-design, algorithmic-art, canvas-design"
     echo "  - Testing: webapp-testing"
     echo "  - Tools: skill-creator"
+    echo "  - Plugins: superpowers, everything-claude-code, oh-my-claudecode"
     echo ""
-    read -p "Install offline skills? [Y/n]: " -n 1 -r
-    echo
-    
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        if bash "$SKILLS_DIR/install-skills.sh" "$SKILLS_DIR/offline-skills"; then
-            log_ok "Offline skills installed successfully"
+
+    # Check for jq dependency (required by install-skills.sh)
+    if ! command -v jq &>/dev/null; then
+        log_warn "jq is required for skills installation"
+        log_info "Attempting to install jq..."
+        if command -v apt-get &>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+        elif command -v yum &>/dev/null; then
+            sudo yum install -y jq
+        elif command -v brew &>/dev/null; then
+            brew install jq
         else
-            log_warn "Some skills may have failed to install"
+            log_error "Could not install jq automatically"
+            log_info "Please install jq manually and run: bash $SKILLS_DIR/install-skills.sh $SKILLS_DIR/offline-skills"
+            SKILLS_DIR=""  # Skip installation
         fi
-    else
-        log_info "Skills installation skipped"
-        log_info "You can install later by running:"
-        log_info "  bash $SKILLS_DIR/install-skills.sh $SKILLS_DIR/offline-skills"
+    fi
+
+    if [ -n "$SKILLS_DIR" ]; then
+        read -p "Install offline skills? [Y/n]: " -n 1 -r
+        echo
+
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            log_info "Running skills installer..."
+            if bash "$SKILLS_DIR/install-skills.sh" "$SKILLS_DIR/offline-skills"; then
+                log_ok "Offline skills installed successfully"
+            else
+                log_error "Skills installation failed!"
+                log_info "Check the output above for errors"
+                log_info "You can retry with: bash $SKILLS_DIR/install-skills.sh $SKILLS_DIR/offline-skills"
+            fi
+        else
+            log_info "Skills installation skipped"
+            log_info "You can install later by running:"
+            log_info "  bash $SKILLS_DIR/install-skills.sh $SKILLS_DIR/offline-skills"
+        fi
     fi
 else
     log_info "No offline skills package found in the bundle"

@@ -303,7 +303,9 @@ main() {
         entry_repo=$(jq -r ".skills[\"${entry_name}\"].repo" "$MANIFEST_FILE")
         entry_path=$(jq -r ".skills[\"${entry_name}\"].path // \"\"" "$MANIFEST_FILE")
         entry_files=$(jq -r ".skills[\"${entry_name}\"].files | join(\" \")" "$MANIFEST_FILE")
-        offline_compatible=$(jq -r ".skills[\"${entry_name}\"].offline_compatible // true" "$MANIFEST_FILE")
+        # jq treats boolean false as falsy, so // true would replace false with true
+        # Use explicit null check instead
+        offline_compatible=$(jq -r "if .skills[\"${entry_name}\"].offline_compatible == null then \"true\" elif .skills[\"${entry_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
 
         # Skip offline-incompatible entries
         if [ "$offline_compatible" = "false" ]; then

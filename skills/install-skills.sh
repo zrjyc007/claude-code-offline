@@ -128,7 +128,9 @@ install_all_skills() {
             local skill_type
             local offline_compatible
             skill_type=$(jq -r ".skills[\"${skill_name}\"].type // \"skill\"" "$MANIFEST_FILE")
-            offline_compatible=$(jq -r ".skills[\"${skill_name}\"].offline_compatible // true" "$MANIFEST_FILE")
+            # jq treats boolean false as falsy, so // true would replace false with true
+            # Use explicit null check instead
+            offline_compatible=$(jq -r "if .skills[\"${skill_name}\"].offline_compatible == null then \"true\" elif .skills[\"${skill_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
 
             # Skip offline-incompatible entries
             if [ "$offline_compatible" = "false" ]; then
