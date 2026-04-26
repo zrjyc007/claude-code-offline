@@ -280,6 +280,16 @@ print_usage() {
         echo ""
         echo "  Plugins:"
         jq -r '.skills | to_entries[] | select(.value.type == "plugin" and .value.offline_compatible != false) | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+
+        echo ""
+        echo "=== Plugin Setup Notes ==="
+        echo ""
+        echo "  oh-my-claudecode: Run '/setup' inside Claude Code after installation"
+        echo "  everything-claude-code: Run '/ecc:plan' to verify installation"
+        echo ""
+        echo "  For detailed plugin usage, see:"
+        echo "    - https://github.com/Yeachan-Heo/oh-my-claudecode"
+        echo "    - https://github.com/affaan-m/everything-claude-code"
     fi
 }
 
