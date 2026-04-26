@@ -117,6 +117,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq git
+
       - name: Configure npm mirrors
         run: |
           # Configure npm to use domestic mirror
@@ -311,22 +314,20 @@ jobs:
 
       - name: Download offline skills and plugins
         run: |
+          set -e
           echo "=== Downloading offline-compatible skills and plugins ==="
           cd "$GITHUB_WORKSPACE"
 
-          # Install jq (required by download-skills.sh)
-          sudo apt-get update && sudo apt-get install -y jq
-
           # Verify jq and git are available
-          echo "jq: $(which jq)"
+          echo "jq: $(which jq) ($(jq --version 2>/dev/null || echo 'not found'))"
           echo "git: $(which git)"
           echo "curl: $(which curl)"
 
           # Verify manifest exists and has plugins
           echo "=== Manifest check ==="
           echo "Manifest file: $(ls -la skills/skills-manifest.json)"
-          echo "Plugin entries:"
-          grep -A1 '"type": "plugin"' skills/skills-manifest.json | head -20
+          echo "Plugin entries in manifest:"
+          grep -B1 '"type": "plugin"' skills/skills-manifest.json | grep '"' | head -10
 
           # Create skills directory
           mkdir -p claude-offline-packages/skills/offline-skills
@@ -335,8 +336,7 @@ jobs:
           # This handles both skills and plugins automatically
           echo "=== Running download-skills.sh ==="
           bash skills/download-skills.sh claude-offline-packages/skills/offline-skills
-          DOWNLOAD_EXIT=$?
-          echo "Download script exit code: $DOWNLOAD_EXIT"
+          echo "Download script completed"
 
           # Copy install script (manifest is already copied by download-skills.sh)
           cp skills/install-skills.sh claude-offline-packages/skills/
