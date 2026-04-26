@@ -90,6 +90,7 @@ download_skill() {
     done
 
     log_ok "Skill '${skill_name}' downloaded"
+    return 0
 }
 
 # Download a plugin (full repo clone)
@@ -103,12 +104,13 @@ download_plugin() {
     log_info "Downloading plugin: ${plugin_name} (from ${plugin_repo})"
 
     # Clone repo with shallow depth
-    local clone_dir="/tmp/${plugin_name}-clone"
+    local clone_dir="/tmp/${plugin_name}-clone-$$"
     local repo_url="https://github.com/${plugin_repo}"
 
     log_info "  Cloning repository: ${repo_url}"
 
-    if git clone --depth 1 "$repo_url" "$clone_dir" 2>/dev/null; then
+    # Clone with visible errors
+    if git clone --depth 1 "$repo_url" "$clone_dir" 2>&1; then
         # Remove .git directory to reduce size
         rm -rf "$clone_dir/.git"
 
@@ -153,6 +155,7 @@ download_plugin() {
         # Cleanup clone directory
         rm -rf "$clone_dir"
         log_ok "Plugin '${plugin_name}' downloaded"
+        return 0
     else
         log_error "  Failed to clone repository: ${repo_url}"
         rm -rf "$clone_dir"
@@ -288,8 +291,8 @@ main() {
     local failed=0
     local succeeded=0
 
-    # Download each skill/plugin
-    jq -r '.skills | keys[]' "$MANIFEST_FILE" | while read -r entry_name; do
+    # Use process substitution instead of pipe to avoid subshell variable isolation
+    while read -r entry_name; do
         local entry_type
         local entry_repo
         local entry_path
@@ -305,6 +308,7 @@ main() {
         # Skip offline-incompatible entries
         if [ "$offline_compatible" = "false" ]; then
             log_warn "Skipping '${entry_name}' - offline_compatible=false"
+            skipped=$((skipped + 1))
             continue
         fi
 
@@ -316,9 +320,13 @@ main() {
                 failed=$((failed + 1))
             fi
         else
-            download_skill "$entry_name" "$entry_repo" "$entry_path" "$entry_files"
+            if download_skill "$entry_name" "$entry_repo" "$entry_path" "$entry_files"; then
+                succeeded=$((succeeded + 1))
+            else
+                failed=$((failed + 1))
+            fi
         fi
-    done
+    done < <(jq -r '.skills | keys[]' "$MANIFEST_FILE")
 
     # Create index
     create_index

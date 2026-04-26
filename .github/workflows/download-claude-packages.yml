@@ -218,25 +218,27 @@ jobs:
           node install.cjs
           cd "$GITHUB_WORKSPACE/claude-offline-packages"
 
-          # Verify native binary was placed
+          # Create .bin symlinks using cli.js (simple and reliable)
+          # Native binary detection happens at setup time in setup-claude-code.sh
+          echo "=== Creating .bin symlinks ==="
+          cd node_modules/.bin
+          if [ -f "../@anthropic-ai/claude-code/cli.js" ]; then
+            ln -sf ../@anthropic-ai/claude-code/cli.js claude
+            chmod +x claude
+            echo "Linked cli.js to node_modules/.bin/claude"
+          fi
+          cd "$GITHUB_WORKSPACE/claude-offline-packages"
+
+          # Verify native binary is available for setup script to use
           if [ -f "node_modules/@anthropic-ai/claude-code/bin/claude.exe" ]; then
             BIN_SIZE=$(stat -c%s "node_modules/@anthropic-ai/claude-code/bin/claude.exe" 2>/dev/null || echo "0")
             if [ "$BIN_SIZE" -gt 100000 ]; then
-              echo "Native binary installed (${BIN_SIZE} bytes)"
-              # Create .bin/claude symlink
-              rm -f node_modules/.bin/claude
-              ln -sf ../@anthropic-ai/claude-code/bin/claude.exe node_modules/.bin/claude
-              chmod +x node_modules/.bin/claude
-              echo "Linked native binary to node_modules/.bin/claude"
+              echo "Native binary available (${BIN_SIZE} bytes) - setup script will use it if compatible"
             else
-              echo "WARNING: bin/claude.exe is still a stub (${BIN_SIZE} bytes), using cli-wrapper.cjs fallback"
-              printf '#!/usr/bin/env node\nrequire("../@anthropic-ai/claude-code/cli-wrapper.cjs");\n' > node_modules/.bin/claude
-              chmod +x node_modules/.bin/claude
+              echo "Native binary is stub (${BIN_SIZE} bytes) - setup script will use cli.js fallback"
             fi
           else
-            echo "WARNING: bin/claude.exe not found, using cli-wrapper.cjs fallback"
-            printf '#!/usr/bin/env node\nrequire("../@anthropic-ai/claude-code/cli-wrapper.cjs");\n' > node_modules/.bin/claude
-            chmod +x node_modules/.bin/claude
+            echo "No native binary - setup script will use cli.js"
           fi
 
           # Extract @musistudio/claude-code-router (if exists)
@@ -245,6 +247,13 @@ jobs:
             echo "Extracting: $ROUTER_TGZ to node_modules/@musistudio/claude-code-router"
             mkdir -p node_modules/@musistudio/claude-code-router
             tar -xzf "$ROUTER_TGZ" -C node_modules/@musistudio/claude-code-router --strip-components=1
+            # Create router symlink
+            cd node_modules/.bin
+            if [ -f "../@musistudio/claude-code-router/dist/cli.js" ]; then
+              ln -sf ../@musistudio/claude-code-router/dist/cli.js ccr
+              chmod +x ccr
+            fi
+            cd "$GITHUB_WORKSPACE/claude-offline-packages"
           fi
 
           # Extract @img/sharp-linux-x64 (if exists)
@@ -290,6 +299,8 @@ jobs:
           echo ""
           echo "=== Verifying claude binary ==="
           ls -la node_modules/.bin/claude 2>/dev/null || echo "claude binary not found"
+          echo ""
+          echo "=== Native binary status ==="
           file node_modules/@anthropic-ai/claude-code/bin/claude.exe 2>/dev/null || true
 
       - name: Download VSCode extension
