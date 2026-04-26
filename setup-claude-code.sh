@@ -1618,16 +1618,79 @@ if [ -f "$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/cli.js" ]; the
     chmod +x "$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/cli.js"
 fi
 
-# Fix the claude launcher script - recreate it as a proper wrapper with absolute path
-if [ -f "$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/cli.js" ]; then
-    log_info "Creating proper launcher script..."
-    # Remove existing symlink first to avoid overwriting the target
+# Verify claude binary is not a stub placeholder
+log_info "Verifying Claude Code binary..."
+CLAUDE_BIN_PATH="$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+if [ -f "$CLAUDE_BIN_PATH" ]; then
+    BIN_SIZE=$(stat -c%s "$CLAUDE_BIN_PATH" 2>/dev/null || echo "0")
+    if [ "$BIN_SIZE" -lt 100000 ]; then
+        log_warn "Claude binary is a placeholder stub (${BIN_SIZE} bytes), not a real binary"
+        log_warn "This package may not work on the current platform."
+        log_info "The package was built for a different platform."
+        log_info ""
+        log_info "To fix this:"
+        log_info "  1. Download the correct platform binary from npm:"
+        log_info "     npm pack @anthropic-ai/claude-code-linux-x64@<version>   # Linux x64 (glibc)"
+        log_info "     npm pack @anthropic-ai/claude-code-linux-arm64@<version>  # Linux ARM"
+        log_info "     npm pack @anthropic-ai/claude-code-darwin-arm64@<version> # macOS Apple Silicon"
+        log_info "     npm pack @anthropic-ai/claude-code-darwin-x64@<version>  # macOS Intel"
+        log_info "  2. Extract and run postinstall:"
+        log_info "     mkdir -p node_modules/@anthropic-ai/claude-code-linux-x64"
+        log_info "     tar -xzf *.tgz -C node_modules/@anthropic-ai/claude-code-linux-x64 --strip-components=1"
+        log_info "     cd node_modules/@anthropic-ai/claude-code && node install.cjs"
+        log_info ""
+        log_info "Or rebuild the offline package on the target platform."
+        log_info "See README.md '平台支持' section for details."
+        echo ""
+
+        # Fall back to cli-wrapper.cjs
+        log_info "Falling back to cli-wrapper.cjs (requires Node.js at runtime)..."
+        rm -f "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+        cat > "$OFFLINE_PACKAGES/node_modules/.bin/claude" << 'WRAPPER'
+#!/usr/bin/env node
+require('../@anthropic-ai/claude-code/cli-wrapper.cjs');
+WRAPPER
+        chmod +x "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+    else
+        log_ok "Claude binary verified (${BIN_SIZE} bytes)"
+    fi
+elif [ -f "$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/cli-wrapper.cjs" ]; then
+    log_info "No native binary found, using cli-wrapper.cjs fallback"
     rm -f "$OFFLINE_PACKAGES/node_modules/.bin/claude"
-    cat > "$OFFLINE_PACKAGES/node_modules/.bin/claude" << 'LAUNCHER'
+    cat > "$OFFLINE_PACKAGES/node_modules/.bin/claude" << 'WRAPPER'
+#!/usr/bin/env node
+require('../@anthropic-ai/claude-code/cli-wrapper.cjs');
+WRAPPER
+    chmod +x "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+fi
+
+# Fix the claude launcher script - only if no native binary available
+# Native binary is preferred, cli-wrapper.cjs is second choice, cli.js is fallback
+if [ ! -f "$OFFLINE_PACKAGES/node_modules/.bin/claude" ]; then
+    # No launcher created yet - check what's available
+    CLAUDE_BIN_PATH="$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+    if [ -f "$CLAUDE_BIN_PATH" ] && [ "$(stat -c%s "$CLAUDE_BIN_PATH" 2>/dev/null || echo 0)" -gt 100000 ]; then
+        # Native binary is valid - link it
+        log_info "Linking native binary..."
+        ln -sf ../@anthropic-ai/claude-code/bin/claude.exe "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+        chmod +x "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+    elif [ -f "$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/cli-wrapper.cjs" ]; then
+        # Use cli-wrapper.cjs as fallback
+        log_info "Creating launcher using cli-wrapper.cjs..."
+        cat > "$OFFLINE_PACKAGES/node_modules/.bin/claude" << 'WRAPPER'
+#!/usr/bin/env node
+require('../@anthropic-ai/claude-code/cli-wrapper.cjs');
+WRAPPER
+        chmod +x "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+    elif [ -f "$OFFLINE_PACKAGES/node_modules/@anthropic-ai/claude-code/cli.js" ]; then
+        # Last fallback - cli.js
+        log_info "Creating launcher using cli.js..."
+        cat > "$OFFLINE_PACKAGES/node_modules/.bin/claude" << 'LAUNCHER'
 #!/usr/bin/env node
 require('../@anthropic-ai/claude-code/cli.js');
 LAUNCHER
-    chmod +x "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+        chmod +x "$OFFLINE_PACKAGES/node_modules/.bin/claude"
+    fi
 fi
 
 # Set binary path

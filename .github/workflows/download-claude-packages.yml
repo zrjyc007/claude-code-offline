@@ -128,13 +128,13 @@ jobs:
       - name: Download packages
         run: |
           set -e
-          
+
           echo "=== Downloading packages as tarballs ==="
-          
+
           # Create working directory
           mkdir -p claude-offline-packages
           cd claude-offline-packages
-          
+
           # Download packages as tarballs
           echo "=== Downloading @anthropic-ai/claude-code ==="
           npm pack @anthropic-ai/claude-code --pack-destination .
@@ -143,29 +143,40 @@ jobs:
           CLAUDE_VERSION="$(npm view @anthropic-ai/claude-code version)"
           mv "$CLAUDE_TGZ" "claude-code-${CLAUDE_VERSION}.tgz"
           echo "Downloaded: claude-code-${CLAUDE_VERSION}.tgz"
-          
+
           # Get installed version for release
           echo "CLAUDE_VERSION=$CLAUDE_VERSION" >> $GITHUB_ENV
           echo "Building Claude Code version: $CLAUDE_VERSION"
-          
+
+          # Download platform-specific native binary (linux-x64 by default)
+          echo "=== Downloading platform native binary ==="
+          npm pack "@anthropic-ai/claude-code-linux-x64@${CLAUDE_VERSION}" --pack-destination .
+          NATIVE_TGZ=$(ls -t anthropic-ai-claude-code-linux-x64-*.tgz 2>/dev/null | head -1)
+          if [ -n "$NATIVE_TGZ" ]; then
+            mv "$NATIVE_TGZ" "claude-code-linux-x64-${CLAUDE_VERSION}.tgz"
+            echo "Downloaded: claude-code-linux-x64-${CLAUDE_VERSION}.tgz"
+          else
+            echo "WARNING: Native binary not available, will use wrapper fallback"
+          fi
+
           # Download optional dependencies that may be needed
           echo "=== Downloading additional dependencies ==="
-          
+
           # sharp and related packages (commonly needed)
           npm pack @img/sharp-linux-x64 --pack-destination . 2>/dev/null || echo "sharp-linux-x64 not available"
           if ls img-sharp-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_ORIG=$(ls -t img-sharp-linux-x64-*.tgz | head -1)
+            SHARP_ORIG=$(ls -t img-sharp-linux-x64-*.tgz | head-1)
             SHARP_VER=$(echo "$SHARP_ORIG" | sed 's/img-sharp-linux-x64-//' | sed 's/.tgz//')
             mv "$SHARP_ORIG" "sharp-linux-x64-${SHARP_VER}.tgz"
           fi
-          
+
           npm pack @img/sharp-libvips-linux-x64 --pack-destination . 2>/dev/null || echo "sharp-libvips-linux-x64 not available"
           if ls img-sharp-libvips-linux-x64-*.tgz 1>/dev/null 2>&1; then
             SHARP_VIPS_ORIG=$(ls -t img-sharp-libvips-linux-x64-*.tgz | head -1)
             SHARP_VIPS_VER=$(echo "$SHARP_VIPS_ORIG" | sed 's/img-sharp-libvips-linux-x64-//' | sed 's/.tgz//')
             mv "$SHARP_VIPS_ORIG" "sharp-libvips-linux-x64-${SHARP_VIPS_VER}.tgz"
           fi
-          
+
           # claude-code-router (useful tool)
           npm pack @musistudio/claude-code-router --pack-destination . 2>/dev/null || echo "claude-code-router not available"
           if ls musistudio-claude-code-router-*.tgz 1>/dev/null 2>&1; then
@@ -173,7 +184,7 @@ jobs:
             ROUTER_VER=$(echo "$ROUTER_ORIG" | sed 's/musistudio-claude-code-router-//' | sed 's/.tgz//')
             mv "$ROUTER_ORIG" "claude-code-router-${ROUTER_VER}.tgz"
           fi
-          
+
           echo "=== Downloaded packages (renamed to match 7z format) ==="
           ls -la *.tgz
 
@@ -181,18 +192,53 @@ jobs:
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/claude-offline-packages"
-          
-          echo "=== Extracting packages to node_modules (matching 7z structure) ==="
-          
+
+          echo "=== Extracting packages to node_modules ==="
+
           # Create node_modules structure
           mkdir -p node_modules/.bin
-          
+
           # Extract @anthropic-ai/claude-code
-          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | head -1)
+          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1)
           echo "Extracting: $CLAUDE_TGZ to node_modules/@anthropic-ai/claude-code"
           mkdir -p node_modules/@anthropic-ai/claude-code
           tar -xzf "$CLAUDE_TGZ" -C node_modules/@anthropic-ai/claude-code --strip-components=1
-          
+
+          # Extract platform native binary to sibling directory so postinstall can find it
+          NATIVE_TGZ=$(ls -t claude-code-linux-x64-*.tgz 2>/dev/null | head -1)
+          if [ -n "$NATIVE_TGZ" ]; then
+            echo "Extracting: $NATIVE_TGZ to node_modules/@anthropic-ai/claude-code-linux-x64"
+            mkdir -p node_modules/@anthropic-ai/claude-code-linux-x64
+            tar -xzf "$NATIVE_TGZ" -C node_modules/@anthropic-ai/claude-code-linux-x64 --strip-components=1
+          fi
+
+          # Run postinstall to place native binary into bin/claude.exe
+          echo "=== Running postinstall to place native binary ==="
+          cd node_modules/@anthropic-ai/claude-code
+          node install.cjs
+          cd "$GITHUB_WORKSPACE/claude-offline-packages"
+
+          # Verify native binary was placed
+          if [ -f "node_modules/@anthropic-ai/claude-code/bin/claude.exe" ]; then
+            BIN_SIZE=$(stat -c%s "node_modules/@anthropic-ai/claude-code/bin/claude.exe" 2>/dev/null || echo "0")
+            if [ "$BIN_SIZE" -gt 100000 ]; then
+              echo "Native binary installed (${BIN_SIZE} bytes)"
+              # Create .bin/claude symlink
+              rm -f node_modules/.bin/claude
+              ln -sf ../@anthropic-ai/claude-code/bin/claude.exe node_modules/.bin/claude
+              chmod +x node_modules/.bin/claude
+              echo "Linked native binary to node_modules/.bin/claude"
+            else
+              echo "WARNING: bin/claude.exe is still a stub (${BIN_SIZE} bytes), using cli-wrapper.cjs fallback"
+              printf '#!/usr/bin/env node\nrequire("../@anthropic-ai/claude-code/cli-wrapper.cjs");\n' > node_modules/.bin/claude
+              chmod +x node_modules/.bin/claude
+            fi
+          else
+            echo "WARNING: bin/claude.exe not found, using cli-wrapper.cjs fallback"
+            printf '#!/usr/bin/env node\nrequire("../@anthropic-ai/claude-code/cli-wrapper.cjs");\n' > node_modules/.bin/claude
+            chmod +x node_modules/.bin/claude
+          fi
+
           # Extract @musistudio/claude-code-router (if exists)
           if ls claude-code-router-*.tgz 1>/dev/null 2>&1; then
             ROUTER_TGZ=$(ls -t claude-code-router-*.tgz 2>/dev/null | head -1)
@@ -200,7 +246,7 @@ jobs:
             mkdir -p node_modules/@musistudio/claude-code-router
             tar -xzf "$ROUTER_TGZ" -C node_modules/@musistudio/claude-code-router --strip-components=1
           fi
-          
+
           # Extract @img/sharp-linux-x64 (if exists)
           if ls sharp-linux-x64-*.tgz 1>/dev/null 2>&1; then
             SHARP_TGZ=$(ls -t sharp-linux-x64-*.tgz 2>/dev/null | head -1)
@@ -208,7 +254,7 @@ jobs:
             mkdir -p node_modules/@img/sharp-linux-x64
             tar -xzf "$SHARP_TGZ" -C node_modules/@img/sharp-linux-x64 --strip-components=1
           fi
-          
+
           # Extract @img/sharp-libvips-linux-x64 (if exists)
           if ls sharp-libvips-linux-x64-*.tgz 1>/dev/null 2>&1; then
             SHARP_VIPS_TGZ=$(ls -t sharp-libvips-linux-x64-*.tgz 2>/dev/null | head -1)
@@ -216,43 +262,35 @@ jobs:
             mkdir -p node_modules/@img/sharp-libvips-linux-x64
             tar -xzf "$SHARP_VIPS_TGZ" -C node_modules/@img/sharp-libvips-linux-x64 --strip-components=1
           fi
-          
-          # Create .bin symlinks (relative paths for portability)
-          echo "=== Creating .bin symlinks ==="
-          cd node_modules/.bin
-          if [ -f "../@anthropic-ai/claude-code/cli.js" ]; then
-            ln -sf ../@anthropic-ai/claude-code/cli.js claude
-            chmod +x claude
-          fi
-          if [ -f "../@musistudio/claude-code-router/dist/cli.js" ]; then
-            ln -sf ../@musistudio/claude-code-router/dist/cli.js ccr
-            chmod +x ccr
-          fi
-          cd ../..
-          
+
           # Create package.json (for reference)
           cat > package.json << EOF
           {
             "name": "claude-offline-packages",
             "version": "${CLAUDE_VERSION}",
             "private": true,
+            "platform": "linux-x64",
             "dependencies": {
               "@anthropic-ai/claude-code": "file:${CLAUDE_TGZ}"
             }
           }
           EOF
-          
+
           # Create package-lock.json (empty for compatibility)
           echo '{}' > package-lock.json
-          
+
           # Create deps-full.json for reference
           echo '{}' > deps-full.json
-          
+
           echo "=== Final package structure ==="
           ls -la
           echo ""
           echo "=== node_modules structure ==="
           find node_modules -maxdepth 3 -type d | head -30
+          echo ""
+          echo "=== Verifying claude binary ==="
+          ls -la node_modules/.bin/claude 2>/dev/null || echo "claude binary not found"
+          file node_modules/@anthropic-ai/claude-code/bin/claude.exe 2>/dev/null || true
 
       - name: Download VSCode extension
         run: |

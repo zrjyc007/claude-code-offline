@@ -90,6 +90,7 @@ claude --version
 ### 目录
 
 - [自动版本更新](#自动版本更新)
+- [平台支持](#平台支持)
 - [镜像源自动检测](#镜像源自动检测)
 - [地区限制绕过](#地区限制绕过)
 - [高级用法](#高级用法)
@@ -121,6 +122,94 @@ bash check-update.sh --check-only
 
 # 有更新则下载并安装
 bash check-update.sh --install
+```
+
+## 平台支持
+
+### 默认构建平台
+
+GitHub Actions 自动构建的离线包默认为 **linux-x64** 平台。包中包含：
+- Claude Code CLI 原生二进制 (linux-x64)
+- 所有离线可用的 skills 和 plugins
+
+### 其他平台构建方法
+
+如果需要在其他平台（macOS、Windows、ARM64、musl 等）使用，需要手动构建：
+
+#### 支持的平台
+
+| 平台 | npm 包名 | 说明 |
+|------|---------|------|
+| **linux-x64** | `@anthropic-ai/claude-code-linux-x64` | 默认构建 (glibc) |
+| **linux-arm64** | `@anthropic-ai/claude-code-linux-arm64` | ARM Linux (glibc) |
+| **linux-x64-musl** | `@anthropic-ai/claude-code-linux-x64-musl` | Alpine/BusyBox |
+| **linux-arm64-musl** | `@anthropic-ai/claude-code-linux-arm64-musl` | Alpine ARM |
+| **darwin-x64** | `@anthropic-ai/claude-code-darwin-x64` | macOS Intel |
+| **darwin-arm64** | `@anthropic-ai/claude-code-darwin-arm64` | macOS Apple Silicon |
+| **win32-x64** | `@anthropic-ai/claude-code-win32-x64` | Windows x64 |
+| **win32-arm64** | `@anthropic-ai/claude-code-win32-arm64` | Windows ARM |
+
+#### 手动构建步骤
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/DeepTrial/claude-code-offline.git
+cd claude-code-offline
+
+# 2. 设置版本号
+CLAUDE_VERSION=$(npm view @anthropic-ai/claude-code version)
+
+# 3. 下载核心包
+npm pack @anthropic-ai/claude-code@${CLAUDE_VERSION} --pack-destination .
+
+# 4. 下载目标平台的原生二进制（根据你的平台选择）
+# macOS Apple Silicon:
+npm pack @anthropic-ai/claude-code-darwin-arm64@${CLAUDE_VERSION} --pack-destination .
+# macOS Intel:
+npm pack @anthropic-ai/claude-code-darwin-x64@${CLAUDE_VERSION} --pack-destination .
+# Windows x64:
+npm pack @anthropic-ai/claude-code-win32-x64@${CLAUDE_VERSION} --pack-destination .
+# Alpine Linux:
+npm pack @anthropic-ai/claude-code-linux-x64-musl@${CLAUDE_VERSION} --pack-destination .
+
+# 5. 下载离线 skills 和 plugins
+bash skills/download-skills.sh claude-offline-packages/skills/offline-skills
+
+# 6. 解压并运行安装脚本
+# (详见 setup-claude-code.sh 中的步骤)
+```
+
+#### 使用 npx 替代（需要网络）
+
+如果目标机器有网络，可以直接安装：
+
+```bash
+# 直接安装会自动下载对应平台的原生二进制
+npm install -g @anthropic-ai/claude-code
+
+# 或使用 npx
+npx @anthropic-ai/claude-code
+```
+
+### 在线下载平台文件后的离线部署
+
+如果需要为其他平台准备离线包，可以在有网络的机器上下载：
+
+```bash
+# 示例：下载 macOS ARM64 版本用于离线部署
+npm pack @anthropic-ai/claude-code@latest
+npm pack @anthropic-ai/claude-code-darwin-arm64@latest
+
+# 将 .tgz 文件传输到目标机器后解压
+mkdir -p node_modules/@anthropic-ai/claude-code
+tar -xzf anthropic-ai-claude-code-*.tgz -C node_modules/@anthropic-ai/claude-code --strip-components=1
+
+mkdir -p node_modules/@anthropic-ai/claude-code-darwin-arm64
+tar -xzf anthropic-ai-claude-code-darwin-arm64-*.tgz -C node_modules/@anthropic-ai/claude-code-darwin-arm64 --strip-components=1
+
+# 运行 postinstall
+cd node_modules/@anthropic-ai/claude-code
+node install.cjs
 ```
 
 ## 镜像源自动检测
