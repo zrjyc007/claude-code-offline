@@ -8,7 +8,7 @@
 # Default output: ./skills/
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -172,42 +172,47 @@ download_directory() {
     # Get directory listing from GitHub API
     local api_url="https://api.github.com/repos/${repo}/contents/${repo_path}?ref=${branch}"
     local response
-    
-    response=$(curl -s "$api_url")
-    
-    # Check if response is an array
+
+    response=$(curl -s "$api_url") || {
+        log_warn "  Failed to fetch API: ${repo_path}"
+        return 0
+    }
+
+    # Check if response is valid JSON array
     if ! echo "$response" | jq -e 'if type == "array" then true else false end' > /dev/null 2>&1; then
         log_warn "  Failed to list directory: ${repo_path}"
-        return 1
+        return 0
     fi
-    
+
     # Download each item
     echo "$response" | jq -r '.[] | @base64' | while read -r item; do
         local item_name
         local item_type
         local item_download_url
         local item_path
-        
-        item_name=$(echo "$item" | base64 -d | jq -r '.name')
-        item_type=$(echo "$item" | base64 -d | jq -r '.type')
-        item_download_url=$(echo "$item" | base64 -d | jq -r '.download_url // empty')
-        item_path=$(echo "$item" | base64 -d | jq -r '.path')
-        
-        if [ "$item_type" == "file" ] && [ -n "$item_download_url" ]; then
+
+        item_name=$(echo "$item" | base64 -d | jq -r '.name' 2>/dev/null || continue)
+        item_type=$(echo "$item" | base64 -d | jq -r '.type' 2>/dev/null || continue)
+        item_download_url=$(echo "$item" | base64 -d | jq -r '.download_url // empty' 2>/dev/null || continue)
+        item_path=$(echo "$item" | base64 -d | jq -r '.path' 2>/dev/null || continue)
+
+        if [ "$item_type" == "file" ] && [ -n "$item_download_url" ] && [ "$item_download_url" != "null" ]; then
             curl -fsSL "$item_download_url" -o "$local_path/$item_name" 2>/dev/null || \
                 log_warn "    Failed: ${item_name}"
         elif [ "$item_type" == "dir" ]; then
             download_directory "$repo" "$branch" "$item_path" "$local_path/$item_name"
         fi
     done
+
+    return 0
 }
 
 # Create skills index
 create_index() {
     local index_file="${OUTPUT_DIR}/SKILLS-INDEX.md"
-    
+
     log_info "Creating skills index..."
-    
+
     cat > "$index_file" << 'EOF'
 # Claude Code Offline Skills Index
 
@@ -236,11 +241,11 @@ EOF
             skill_name=$(basename "$skill_dir")
             local description
             description=$(grep -m1 "^description:" "$skill_dir/SKILL.md" 2>/dev/null | cut -d'"' -f2 || echo "No description")
-            
+
             echo "- **${skill_name}**: ${description}" >> "$index_file"
         fi
     done
-    
+
     cat >> "$index_file" << 'EOF'
 
 ## Usage
@@ -279,6 +284,10 @@ main() {
     skills_count=$(jq -r '.skills | length' "$MANIFEST_FILE")
     log_info "Found ${skills_count} entries in manifest"
 
+    local skipped=0
+    local failed=0
+    local succeeded=0
+
     # Download each skill/plugin
     jq -r '.skills | keys[]' "$MANIFEST_FILE" | while read -r entry_name; do
         local entry_type
@@ -301,7 +310,11 @@ main() {
 
         # Download based on type
         if [ "$entry_type" = "plugin" ]; then
-            download_plugin "$entry_name" "$entry_repo" "$entry_path" "$entry_files"
+            if download_plugin "$entry_name" "$entry_repo" "$entry_path" "$entry_files"; then
+                succeeded=$((succeeded + 1))
+            else
+                failed=$((failed + 1))
+            fi
         else
             download_skill "$entry_name" "$entry_repo" "$entry_path" "$entry_files"
         fi
@@ -314,7 +327,8 @@ main() {
     cp "$MANIFEST_FILE" "$OUTPUT_DIR/"
 
     log_info "======================================="
-    log_ok "All skills/plugins downloaded to: ${OUTPUT_DIR}"
+    log_ok "Download completed: ${succeeded} succeeded, ${failed} failed, ${skipped} skipped"
+    log_info "Output: ${OUTPUT_DIR}"
     log_info "Total size: $(du -sh "$OUTPUT_DIR" | cut -f1)"
 }
 
