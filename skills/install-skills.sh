@@ -75,12 +75,10 @@ install_skill() {
         fi
 
         # Copy rules directory separately (plugins cannot distribute rules automatically)
-        # Rules should go to ~/.claude/rules/<plugin-name>/ to avoid conflicts
+        # Rules should go directly to ~/.claude/rules/<language>/ (not under plugin name)
         if [ -d "$source_path/rules" ]; then
-            local rules_target="${HOME}/.claude/rules/${skill_name}"
-            log_info "  Copying rules to: ${rules_target}"
-            mkdir -p "$rules_target"
-            # Copy each language subdirectory (common, typescript, python, etc.)
+            log_info "  Copying rules..."
+            # Copy each language subdirectory (common, typescript, python, golang, etc.)
             for rule_dir in "$source_path/rules"/*/; do
                 if [ -d "$rule_dir" ]; then
                     local rule_subdir
