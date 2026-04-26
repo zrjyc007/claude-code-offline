@@ -138,7 +138,7 @@ jobs:
           # Download packages as tarballs
           echo "=== Downloading @anthropic-ai/claude-code ==="
           npm pack @anthropic-ai/claude-code --pack-destination .
-          CLAUDE_TGZ=$(ls -t anthropic-ai-claude-code-*.tgz 2>/dev/null | head -1)
+          CLAUDE_TGZ=$(ls -t anthropic-ai-claude-code-*.tgz 2>/dev/null | head -1 || true)
           # Rename to short name (matching 7z package)
           CLAUDE_VERSION="$(npm view @anthropic-ai/claude-code version)"
           mv "$CLAUDE_TGZ" "claude-code-${CLAUDE_VERSION}.tgz"
@@ -151,7 +151,7 @@ jobs:
           # Download platform-specific native binary (linux-x64 by default)
           echo "=== Downloading platform native binary ==="
           npm pack "@anthropic-ai/claude-code-linux-x64@${CLAUDE_VERSION}" --pack-destination .
-          NATIVE_TGZ=$(ls -t anthropic-ai-claude-code-linux-x64-*.tgz 2>/dev/null | head -1)
+          NATIVE_TGZ=$(ls -t anthropic-ai-claude-code-linux-x64-*.tgz 2>/dev/null | head -1 || true)
           if [ -n "$NATIVE_TGZ" ]; then
             mv "$NATIVE_TGZ" "claude-code-linux-x64-${CLAUDE_VERSION}.tgz"
             echo "Downloaded: claude-code-linux-x64-${CLAUDE_VERSION}.tgz"
@@ -165,14 +165,14 @@ jobs:
           # sharp and related packages (commonly needed)
           npm pack @img/sharp-linux-x64 --pack-destination . 2>/dev/null || echo "sharp-linux-x64 not available"
           if ls img-sharp-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_ORIG=$(ls -t img-sharp-linux-x64-*.tgz | head-1)
+            SHARP_ORIG=$(ls -t img-sharp-linux-x64-*.tgz 2>/dev/null | head -1 || true)
             SHARP_VER=$(echo "$SHARP_ORIG" | sed 's/img-sharp-linux-x64-//' | sed 's/.tgz//')
             mv "$SHARP_ORIG" "sharp-linux-x64-${SHARP_VER}.tgz"
           fi
 
           npm pack @img/sharp-libvips-linux-x64 --pack-destination . 2>/dev/null || echo "sharp-libvips-linux-x64 not available"
           if ls img-sharp-libvips-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_VIPS_ORIG=$(ls -t img-sharp-libvips-linux-x64-*.tgz | head -1)
+            SHARP_VIPS_ORIG=$(ls -t img-sharp-libvips-linux-x64-*.tgz 2>/dev/null | head -1 || true)
             SHARP_VIPS_VER=$(echo "$SHARP_VIPS_ORIG" | sed 's/img-sharp-libvips-linux-x64-//' | sed 's/.tgz//')
             mv "$SHARP_VIPS_ORIG" "sharp-libvips-linux-x64-${SHARP_VIPS_VER}.tgz"
           fi
@@ -180,7 +180,7 @@ jobs:
           # claude-code-router (useful tool)
           npm pack @musistudio/claude-code-router --pack-destination . 2>/dev/null || echo "claude-code-router not available"
           if ls musistudio-claude-code-router-*.tgz 1>/dev/null 2>&1; then
-            ROUTER_ORIG=$(ls -t musistudio-claude-code-router-*.tgz | head -1)
+            ROUTER_ORIG=$(ls -t musistudio-claude-code-router-*.tgz 2>/dev/null | head -1 || true)
             ROUTER_VER=$(echo "$ROUTER_ORIG" | sed 's/musistudio-claude-code-router-//' | sed 's/.tgz//')
             mv "$ROUTER_ORIG" "claude-code-router-${ROUTER_VER}.tgz"
           fi
@@ -199,13 +199,13 @@ jobs:
           mkdir -p node_modules/.bin
 
           # Extract @anthropic-ai/claude-code
-          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1)
+          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1 || true)
           echo "Extracting: $CLAUDE_TGZ to node_modules/@anthropic-ai/claude-code"
           mkdir -p node_modules/@anthropic-ai/claude-code
           tar -xzf "$CLAUDE_TGZ" -C node_modules/@anthropic-ai/claude-code --strip-components=1
 
           # Extract platform native binary to sibling directory so postinstall can find it
-          NATIVE_TGZ=$(ls -t claude-code-linux-x64-*.tgz 2>/dev/null | head -1)
+          NATIVE_TGZ=$(ls -t claude-code-linux-x64-*.tgz 2>/dev/null | head -1 || true)
           if [ -n "$NATIVE_TGZ" ]; then
             echo "Extracting: $NATIVE_TGZ to node_modules/@anthropic-ai/claude-code-linux-x64"
             mkdir -p node_modules/@anthropic-ai/claude-code-linux-x64
@@ -241,7 +241,7 @@ jobs:
 
           # Extract @musistudio/claude-code-router (if exists)
           if ls claude-code-router-*.tgz 1>/dev/null 2>&1; then
-            ROUTER_TGZ=$(ls -t claude-code-router-*.tgz 2>/dev/null | head -1)
+            ROUTER_TGZ=$(ls -t claude-code-router-*.tgz 2>/dev/null | head -1 || true)
             echo "Extracting: $ROUTER_TGZ to node_modules/@musistudio/claude-code-router"
             mkdir -p node_modules/@musistudio/claude-code-router
             tar -xzf "$ROUTER_TGZ" -C node_modules/@musistudio/claude-code-router --strip-components=1
@@ -249,7 +249,7 @@ jobs:
 
           # Extract @img/sharp-linux-x64 (if exists)
           if ls sharp-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_TGZ=$(ls -t sharp-linux-x64-*.tgz 2>/dev/null | head -1)
+            SHARP_TGZ=$(ls -t sharp-linux-x64-*.tgz 2>/dev/null | head -1 || true)
             echo "Extracting: $SHARP_TGZ to node_modules/@img/sharp-linux-x64"
             mkdir -p node_modules/@img/sharp-linux-x64
             tar -xzf "$SHARP_TGZ" -C node_modules/@img/sharp-linux-x64 --strip-components=1
@@ -257,7 +257,7 @@ jobs:
 
           # Extract @img/sharp-libvips-linux-x64 (if exists)
           if ls sharp-libvips-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_VIPS_TGZ=$(ls -t sharp-libvips-linux-x64-*.tgz 2>/dev/null | head -1)
+            SHARP_VIPS_TGZ=$(ls -t sharp-libvips-linux-x64-*.tgz 2>/dev/null | head -1 || true)
             echo "Extracting: $SHARP_VIPS_TGZ to node_modules/@img/sharp-libvips-linux-x64"
             mkdir -p node_modules/@img/sharp-libvips-linux-x64
             tar -xzf "$SHARP_VIPS_TGZ" -C node_modules/@img/sharp-libvips-linux-x64 --strip-components=1
@@ -319,8 +319,8 @@ jobs:
             echo "Trying VSCode Marketplace directly..."
             
             # Get latest version first
-            VERSION=$(curl -s "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code" | \
-              grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+            VERSION=$(curl -s "https://marketplace.visualstudio.com/items?itemName=anthropic.claude-code" 2>/dev/null | \
+              grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
             
             if [ -n "$VERSION" ]; then
               echo "Found version: $VERSION"
