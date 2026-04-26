@@ -7,7 +7,7 @@ on:
       force_rebuild:
         description: 'Force rebuild even if version exists'
         required: false
-        default: 'false'
+        default: 'true'
       specific_version:
         description: 'Build specific version (e.g., 2.1.79). Leave empty to use latest.'
         required: false
