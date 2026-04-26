@@ -363,6 +363,9 @@ jobs:
           echo "=== Downloading offline-compatible skills and plugins ==="
           cd "$GITHUB_WORKSPACE"
 
+          # Install jq (required by download-skills.sh)
+          sudo apt-get update && sudo apt-get install -y jq
+
           # Create skills directory
           mkdir -p claude-offline-packages/skills/offline-skills
 
@@ -370,13 +373,15 @@ jobs:
           # This handles both skills and plugins automatically
           bash skills/download-skills.sh claude-offline-packages/skills/offline-skills
 
-          # Copy manifest and install script
-          cp skills/skills-manifest.json claude-offline-packages/skills/
+          # Copy install script (manifest is already copied by download-skills.sh)
           cp skills/install-skills.sh claude-offline-packages/skills/
           chmod +x claude-offline-packages/skills/install-skills.sh
 
           echo "=== Skills and plugins download completed ==="
           echo "Total entries: $(ls -1 claude-offline-packages/skills/offline-skills 2>/dev/null | wc -l)"
+          echo ""
+          echo "=== Checking for plugins ==="
+          ls -la claude-offline-packages/skills/offline-skills/ | grep -E "superpowers|everything-claude-code|oh-my-claudecode" || echo "WARNING: Plugins not found!"
           du -sh claude-offline-packages/skills/
 
       - name: Copy setup script
