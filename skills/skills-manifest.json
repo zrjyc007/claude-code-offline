@@ -45,7 +45,7 @@
       "offline_compatible": true,
       "size_estimate": "350KB",
       "dependencies": ["openpyxl", "xlsx-populate"],
-      "files": ["SKILL.md"]
+      "files": ["SKILL.md", "scripts/"]
     },
     "frontend-design": {
       "name": "frontend-design",
@@ -100,7 +100,7 @@
       "offline_compatible": true,
       "size_estimate": "45KB",
       "dependencies": [],
-      "files": ["SKILL.md"]
+      "files": ["SKILL.md", "scripts/"]
     },
     "webapp-testing": {
       "name": "webapp-testing",
@@ -122,7 +122,7 @@
       "offline_compatible": true,
       "size_estimate": "25KB",
       "dependencies": [],
-      "files": ["SKILL.md"]
+      "files": ["SKILL.md", "scripts/"]
     },
     "brand-guidelines": {
       "name": "brand-guidelines",
