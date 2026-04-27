@@ -185,13 +185,12 @@ jobs:
           set -e
           cd "$GITHUB_WORKSPACE/claude-offline-packages"
 
-          echo "=== Installing packages to node_modules (with vendor binaries) ==="
+          echo "=== Installing packages to node_modules ==="
 
           # Create node_modules structure
           mkdir -p node_modules/.bin
 
-          # Use npm install in a temp dir to get the full package with vendor binaries
-          # (npm pack only creates source tarballs without platform-specific binaries)
+          # Use npm install in a temp dir to get the full package with platform binaries
           CLAUDE_VERSION="${CLAUDE_VERSION:-${{ env.CLAUDE_VERSION }}}"
           echo "Installing @anthropic-ai/claude-code@${CLAUDE_VERSION} with full dependencies..."
 
@@ -210,24 +209,70 @@ jobs:
 
           if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR/node_modules/@anthropic-ai/claude-code" ]; then
             cd "$GITHUB_WORKSPACE/claude-offline-packages"
-            echo "Copying installed package (with vendor binaries)..."
+            echo "Copying installed package..."
+
+            # Copy main package
             mkdir -p node_modules/@anthropic-ai/claude-code
             cp -r "$TEMP_DIR/node_modules/@anthropic-ai/claude-code/"* node_modules/@anthropic-ai/claude-code/
+
+            # Copy platform-specific binary packages (needed for native claude binary)
+            for platform_pkg in "$TEMP_DIR"/node_modules/@anthropic-ai/claude-code-*/; do
+              if [ -d "$platform_pkg" ]; then
+                pkg_name=$(basename "$platform_pkg")
+                echo "  Copying platform package: $pkg_name"
+                mkdir -p "node_modules/@anthropic-ai/$pkg_name"
+                cp -r "$platform_pkg"* "node_modules/@anthropic-ai/$pkg_name/" 2>/dev/null || true
+              fi
+            done
+
             rm -rf "$TEMP_DIR"
+          fi
+
+          # Place the native binary (postinstall may not run in CI)
+          echo "=== Placing native binary ==="
+          CLAUDE_CODE_DIR="$GITHUB_WORKSPACE/claude-offline-packages/node_modules/@anthropic-ai/claude-code"
+
+          # Detect platform and architecture
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            PLATFORM_ARCH="x64"
+          elif [ "$ARCH" = "aarch64" ]; then
+            PLATFORM_ARCH="arm64"
+          else
+            PLATFORM_ARCH="$ARCH"
+          fi
+          echo "Platform: linux-${PLATFORM_ARCH}"
+
+          # Find and copy the native binary
+          PLATFORM_PKG="$GITHUB_WORKSPACE/claude-offline-packages/node_modules/@anthropic-ai/claude-code-linux-${PLATFORM_ARCH}"
+          if [ -d "$PLATFORM_PKG" ] && [ -f "$PLATFORM_PKG/claude" ]; then
+            echo "Found native binary: $PLATFORM_PKG/claude"
+            cp "$PLATFORM_PKG/claude" "$CLAUDE_CODE_DIR/bin/claude.exe"
+            chmod +x "$CLAUDE_CODE_DIR/bin/claude.exe"
+            echo "Native binary placed at bin/claude.exe"
+          else
+            echo "WARN: Native binary not found at $PLATFORM_PKG/claude"
+            echo "Available platform packages:"
+            ls -d "$GITHUB_WORKSPACE/claude-offline-packages/node_modules/@anthropic-ai/claude-code-"* 2>/dev/null || echo "  None"
           fi
 
           # Create .bin symlinks (relative paths for portability)
           echo "=== Creating .bin symlinks ==="
           cd "$GITHUB_WORKSPACE/claude-offline-packages/node_modules/.bin"
-          # Check for cli.js (npm-installed package entry point)
+          # Prefer cli.js (old architecture), fall back to bin/claude.exe (new architecture)
           if [ -f "../@anthropic-ai/claude-code/cli.js" ]; then
             ln -sf ../@anthropic-ai/claude-code/cli.js claude
             chmod +x claude
             echo "Created symlink: claude -> cli.js"
-          elif [ -f "../@anthropic-ai/claude-code/bin/claude" ]; then
-            ln -sf ../@anthropic-ai/claude-code/bin/claude claude
+          elif [ -f "../@anthropic-ai/claude-code/bin/claude.exe" ]; then
+            ln -sf ../@anthropic-ai/claude-code/bin/claude.exe claude
             chmod +x claude
-            echo "Created symlink: claude -> bin/claude"
+            echo "Created symlink: claude -> bin/claude.exe"
+          elif [ -f "../@anthropic-ai/claude-code/cli-wrapper.cjs" ]; then
+            # Fallback: use Node.js wrapper (works but slower)
+            ln -sf ../@anthropic-ai/claude-code/cli-wrapper.cjs claude
+            chmod +x claude
+            echo "Created symlink: claude -> cli-wrapper.cjs (fallback)"
           else
             echo "WARN: No claude entry point found"
             ls -la "../@anthropic-ai/claude-code/" 2>/dev/null | head -10
