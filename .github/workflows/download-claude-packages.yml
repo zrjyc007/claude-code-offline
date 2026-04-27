@@ -185,29 +185,59 @@ jobs:
           set -e
           cd "$GITHUB_WORKSPACE/claude-offline-packages"
 
-          echo "=== Extracting packages to node_modules (matching 7z structure) ==="
+          echo "=== Installing packages to node_modules (with vendor binaries) ==="
 
           # Create node_modules structure
           mkdir -p node_modules/.bin
 
-          # Extract @anthropic-ai/claude-code
-          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1 || true)
-          echo "Extracting: $CLAUDE_TGZ to node_modules/@anthropic-ai/claude-code"
-          mkdir -p node_modules/@anthropic-ai/claude-code
-          tar -xzf "$CLAUDE_TGZ" -C node_modules/@anthropic-ai/claude-code --strip-components=1
+          # Use npm install in a temp dir to get the full package with vendor binaries
+          # (npm pack only creates source tarballs without platform-specific binaries)
+          CLAUDE_VERSION="${CLAUDE_VERSION:-${{ env.CLAUDE_VERSION }}}"
+          echo "Installing @anthropic-ai/claude-code@${CLAUDE_VERSION} with full dependencies..."
+
+          TEMP_DIR=$(mktemp -d)
+          cd "$TEMP_DIR"
+          npm init -y > /dev/null 2>&1
+          npm install "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+            --registry "${{ env.NPM_REGISTRY }}" 2>&1 || {
+            echo "WARN: npm install failed, falling back to npm pack extraction"
+            cd "$GITHUB_WORKSPACE/claude-offline-packages"
+            CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1 || true)
+            mkdir -p node_modules/@anthropic-ai/claude-code
+            tar -xzf "$CLAUDE_TGZ" -C node_modules/@anthropic-ai/claude-code --strip-components=1
+            TEMP_DIR=""
+          }
+
+          if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR/node_modules/@anthropic-ai/claude-code" ]; then
+            cd "$GITHUB_WORKSPACE/claude-offline-packages"
+            echo "Copying installed package (with vendor binaries)..."
+            mkdir -p node_modules/@anthropic-ai/claude-code
+            cp -r "$TEMP_DIR/node_modules/@anthropic-ai/claude-code/"* node_modules/@anthropic-ai/claude-code/
+            rm -rf "$TEMP_DIR"
+          fi
 
           # Create .bin symlinks (relative paths for portability)
           echo "=== Creating .bin symlinks ==="
-          cd node_modules/.bin
+          cd "$GITHUB_WORKSPACE/claude-offline-packages/node_modules/.bin"
+          # Check for cli.js (npm-installed package entry point)
           if [ -f "../@anthropic-ai/claude-code/cli.js" ]; then
             ln -sf ../@anthropic-ai/claude-code/cli.js claude
             chmod +x claude
+            echo "Created symlink: claude -> cli.js"
+          elif [ -f "../@anthropic-ai/claude-code/bin/claude" ]; then
+            ln -sf ../@anthropic-ai/claude-code/bin/claude claude
+            chmod +x claude
+            echo "Created symlink: claude -> bin/claude"
+          else
+            echo "WARN: No claude entry point found"
+            ls -la "../@anthropic-ai/claude-code/" 2>/dev/null | head -10
           fi
           if [ -f "../@musistudio/claude-code-router/dist/cli.js" ]; then
             ln -sf ../@musistudio/claude-code-router/dist/cli.js ccr
             chmod +x ccr
+            echo "Created symlink: ccr -> cli.js"
           fi
-          cd ../..
+          cd "$GITHUB_WORKSPACE/claude-offline-packages"
 
           # Extract @musistudio/claude-code-router (if exists)
           if ls claude-code-router-*.tgz 1>/dev/null 2>&1; then
@@ -234,6 +264,7 @@ jobs:
           fi
 
           # Create package.json (for reference)
+          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1 || true)
           cat > package.json << EOF
           {
             "name": "claude-offline-packages",
@@ -256,6 +287,9 @@ jobs:
           echo ""
           echo "=== node_modules structure ==="
           find node_modules -maxdepth 3 -type d | head -30
+          echo ""
+          echo "=== vendor binaries check ==="
+          ls -la node_modules/@anthropic-ai/claude-code/vendor/ 2>/dev/null || echo "No vendor directory (may indicate npm pack fallback was used)"
 
       - name: Download VSCode extension
         run: |
@@ -341,6 +375,15 @@ jobs:
           # Copy install script (manifest is already copied by download-skills.sh)
           cp skills/install-skills.sh claude-offline-packages/skills/
           chmod +x claude-offline-packages/skills/install-skills.sh
+
+          # Copy SKILLS-INDEX.md and skills-manifest.json to skills/ root level
+          # (download-skills.sh puts them in offline-skills/, but they belong at skills/ level)
+          if [ -f "claude-offline-packages/skills/offline-skills/SKILLS-INDEX.md" ]; then
+            cp claude-offline-packages/skills/offline-skills/SKILLS-INDEX.md claude-offline-packages/skills/
+          fi
+          if [ -f "claude-offline-packages/skills/offline-skills/skills-manifest.json" ]; then
+            cp claude-offline-packages/skills/offline-skills/skills-manifest.json claude-offline-packages/skills/
+          fi
 
           echo "=== Skills and plugins download completed ==="
           echo "All entries in offline-skills:"
