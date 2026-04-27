@@ -93,7 +93,7 @@ download_skill() {
     return 0
 }
 
-# Download a plugin (full repo clone)
+# Download a plugin (full repo clone, filtered by files list)
 download_plugin() {
     local plugin_name="$1"
     local plugin_repo="$2"
@@ -117,20 +117,23 @@ download_plugin() {
         # Create output directory
         mkdir -p "$output_path"
 
-        # If path is specified, only copy that subdirectory
+        # Determine source base directory
+        local src_base="$clone_dir"
         if [ -n "$plugin_path" ] && [ "$plugin_path" != "" ]; then
-            local src_dir="$clone_dir/${plugin_path}"
-            if [ -d "$src_dir" ]; then
-                log_info "  Extracting path: ${plugin_path}"
-                cp -r "$src_dir"/* "$output_path/" 2>/dev/null || true
+            src_base="$clone_dir/${plugin_path}"
+            if [ ! -d "$src_base" ]; then
+                log_warn "  Path ${plugin_path} not found in repo, using root"
+                src_base="$clone_dir"
             else
-                log_warn "  Path ${plugin_path} not found in repo, copying root"
-                cp -r "$clone_dir"/* "$output_path/" 2>/dev/null || true
+                log_info "  Using path: ${plugin_path}"
             fi
-        else
-            # Copy specific files/directories from plugin_files
+        fi
+
+        # Copy only the files/directories specified in plugin_files
+        # This prevents cloning entire repos with unnecessary files
+        if [ -n "$plugin_files" ]; then
             for file in $plugin_files; do
-                local src_item="$clone_dir/${file%/}"
+                local src_item="${src_base}/${file%/}"
                 if [[ "$file" == */ ]]; then
                     # It's a directory
                     if [ -d "$src_item" ]; then
@@ -144,12 +147,17 @@ download_plugin() {
                     # It's a file
                     if [ -f "$src_item" ]; then
                         log_info "  Copying file: ${file}"
+                        mkdir -p "$(dirname "$output_path/${file}")"
                         cp "$src_item" "$output_path/${file}" 2>/dev/null || true
                     else
                         log_warn "  File not found: ${file}"
                     fi
                 fi
             done
+        else
+            # No files specified, copy everything (fallback)
+            log_warn "  No files list specified, copying entire directory"
+            cp -r "$src_base"/* "$output_path/" 2>/dev/null || true
         fi
 
         # Cleanup clone directory
