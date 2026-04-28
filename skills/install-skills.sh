@@ -60,26 +60,63 @@ install_skill() {
     local source_path="${SKILLS_SOURCE}/${skill_name}"
 
     if [ "$skill_type" = "plugin" ]; then
-        local target_path="${CLAUDE_PLUGINS_DIR}/${skill_name}"
-        log_info "Installing plugin: ${skill_name}"
+        # Get marketplace name from manifest (repo field)
+        local marketplace_name=""
+        if [ -f "$MANIFEST_FILE" ]; then
+            marketplace_name=$(jq -r ".skills[\"${skill_name}\"].repo // empty" "$MANIFEST_FILE" 2>/dev/null)
+        fi
 
-        # Create target directory
-        mkdir -p "$target_path"
+        # Fallback to skill_name if repo not found
+        if [ -z "$marketplace_name" ]; then
+            marketplace_name="$skill_name"
+        fi
 
-        # Copy plugin files (skills, agents, commands, hooks, .claude-plugin, etc.)
-        if cp -r "$source_path"/* "$target_path/" 2>/dev/null; then
-            log_ok "  Plugin files installed to: ${target_path}"
+        # Create marketplace directory structure
+        local marketplace_dir="${CLAUDE_PLUGINS_DIR}/marketplaces/${marketplace_name}"
+        local cache_dir="${CLAUDE_PLUGINS_DIR}/cache/${marketplace_name}/${skill_name}"
+
+        log_info "Installing plugin: ${skill_name} (marketplace: ${marketplace_name})"
+
+        # Create marketplace directory if it doesn't exist
+        mkdir -p "$marketplace_dir"
+
+        # Create cache directory for this plugin
+        mkdir -p "$cache_dir"
+
+        # Copy plugin files to cache directory
+        if cp -r "$source_path"/* "$cache_dir/" 2>/dev/null; then
+            log_ok "  Plugin files installed to: ${cache_dir}"
         else
             log_warn "  Failed to copy plugin files"
             return 1
         fi
 
+        # Get git commit SHA if available
+        local git_sha="unknown"
+        if [ -d "$cache_dir/.git" ]; then
+            git_sha=$(cd "$cache_dir" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+            log_info "  Git commit SHA: ${git_sha}"
+        fi
+
+        # Get version from package.json if available
+        local version="1.0.0"
+        if [ -f "$cache_dir/package.json" ]; then
+            version=$(jq -r '.version // "1.0.0"' "$cache_dir/package.json" 2>/dev/null || echo "1.0.0")
+            log_info "  Version: ${version}"
+        fi
+
+        # Register plugin in installed_plugins.json
+        register_plugin "$marketplace_name" "$skill_name" "$version" "$git_sha" "$cache_dir"
+
+        # Register marketplace in known_marketplaces.json
+        register_marketplace "$marketplace_name" "$marketplace_dir"
+
         # Copy rules directory separately (plugins cannot distribute rules automatically)
         # Rules should go directly to ~/.claude/rules/<language>/ (not under plugin name)
-        if [ -d "$source_path/rules" ]; then
+        if [ -d "$cache_dir/rules" ]; then
             log_info "  Copying rules..."
             # Copy each language subdirectory (common, typescript, python, golang, etc.)
-            for rule_dir in "$source_path/rules"/*/; do
+            for rule_dir in "$cache_dir/rules"/*/; do
                 if [ -d "$rule_dir" ]; then
                     local rule_subdir
                     rule_subdir=$(basename "$rule_dir")
@@ -106,6 +143,88 @@ install_skill() {
     fi
 
     return 0
+}
+
+# Register a plugin in installed_plugins.json
+register_plugin() {
+    local marketplace_name="$1"
+    local plugin_name="$2"
+    local version="$3"
+    local git_sha="$4"
+    local install_path="$5"
+
+    local plugins_file="${CLAUDE_PLUGINS_DIR}/installed_plugins.json"
+    local plugin_key="${plugin_name}@${marketplace_name}"
+    local installed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    log_info "  Registering plugin: ${plugin_key}"
+
+    # Create installed_plugins.json if it doesn't exist
+    if [ ! -f "$plugins_file" ]; then
+        cat > "$plugins_file" << EOF
+{
+  "version": 2,
+  "plugins": {}
+}
+EOF
+    fi
+
+    # Create temporary file for jq update
+    local tmp_file=$(mktemp)
+
+    # Add plugin entry
+    jq --arg key "$plugin_key" \
+       --arg marketplace "$marketplace_name" \
+       --arg plugin "$plugin_name" \
+       --arg version "$version" \
+       --arg sha "$git_sha" \
+       --arg path "$install_path" \
+       --arg time "$installed_at" \
+       '.plugins[$key] = [{
+         "scope": "user",
+         "installPath": $path,
+         "version": $version,
+         "installedAt": $time,
+         "lastUpdated": $time,
+         "gitCommitSha": $sha,
+         "marketplace": $marketplace
+       }]' "$plugins_file" > "$tmp_file" && mv "$tmp_file" "$plugins_file"
+
+    log_ok "  Plugin registered in installed_plugins.json"
+}
+
+# Register marketplace in known_marketplaces.json
+register_marketplace() {
+    local marketplace_name="$1"
+    local marketplace_dir="$2"
+    local marketplaces_file="${CLAUDE_PLUGINS_DIR}/known_marketplaces.json"
+
+    log_info "Registering marketplace: ${marketplace_name}"
+
+    # Create known_marketplaces.json if it doesn't exist
+    if [ ! -f "$marketplaces_file" ]; then
+        cat > "$marketplaces_file" << EOF
+{}
+EOF
+    fi
+
+    # Create temporary file for jq update
+    local tmp_file=$(mktemp)
+
+    # Add marketplace entry
+    jq --arg name "$marketplace_name" \
+       --arg path "$marketplace_dir" \
+       --arg time "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+       '.[$name] = {
+         "source": {
+           "source": "local",
+           "path": $path
+         },
+         "installLocation": $path,
+         "lastUpdated": $time
+       }' "$marketplaces_file" > "$tmp_file" && mv "$tmp_file" "$marketplaces_file"
+
+    log_ok "Marketplace registered in known_marketplaces.json"
 }
 
 # Install all skills and plugins
