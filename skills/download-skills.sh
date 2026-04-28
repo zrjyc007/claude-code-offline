@@ -93,7 +93,7 @@ download_skill() {
     return 0
 }
 
-# Download a plugin (full repo clone, filtered by files list)
+# Download a plugin (full repo clone, preserved as git repository)
 download_plugin() {
     local plugin_name="$1"
     local plugin_repo="$2"
@@ -111,9 +111,6 @@ download_plugin() {
 
     # Clone with visible errors
     if git clone --depth 1 "$repo_url" "$clone_dir" 2>&1; then
-        # Remove .git directory to reduce size
-        rm -rf "$clone_dir/.git"
-
         # Create output directory
         mkdir -p "$output_path"
 
@@ -129,40 +126,20 @@ download_plugin() {
             fi
         fi
 
-        # Copy only the files/directories specified in plugin_files
-        # This prevents cloning entire repos with unnecessary files
-        if [ -n "$plugin_files" ]; then
-            for file in $plugin_files; do
-                local src_item="${src_base}/${file%/}"
-                if [[ "$file" == */ ]]; then
-                    # It's a directory
-                    if [ -d "$src_item" ]; then
-                        log_info "  Copying directory: ${file}"
-                        mkdir -p "$output_path/${file}"
-                        cp -r "$src_item"/* "$output_path/${file}/" 2>/dev/null || true
-                    else
-                        log_warn "  Directory not found: ${file}"
-                    fi
-                else
-                    # It's a file
-                    if [ -f "$src_item" ]; then
-                        log_info "  Copying file: ${file}"
-                        mkdir -p "$(dirname "$output_path/${file}")"
-                        cp "$src_item" "$output_path/${file}" 2>/dev/null || true
-                    else
-                        log_warn "  File not found: ${file}"
-                    fi
-                fi
-            done
-        else
-            # No files specified, copy everything (fallback)
-            log_warn "  No files list specified, copying entire directory"
-            cp -r "$src_base"/* "$output_path/" 2>/dev/null || true
+        # Copy the entire plugin directory preserving git repository structure
+        # This ensures plugins are proper git repositories that can be tracked
+        log_info "  Copying plugin directory (preserving .git)"
+        cp -r "$clone_dir"/* "$output_path/" 2>/dev/null || true
+
+        # Also copy .git directory if it exists
+        if [ -d "$clone_dir/.git" ]; then
+            log_info "  Copying .git directory"
+            cp -r "$clone_dir/.git" "$output_path/" 2>/dev/null || true
         fi
 
         # Cleanup clone directory
         rm -rf "$clone_dir"
-        log_ok "Plugin '${plugin_name}' downloaded"
+        log_ok "Plugin '${plugin_name}' downloaded (git repository preserved)"
         return 0
     else
         log_error "  Failed to clone repository: ${repo_url}"
