@@ -3,7 +3,7 @@
 # Download jq binary for offline deployment
 # =============================================================================
 # Downloads jq binary for the current platform and architecture
-# Usage: bash download-jq.sh [output_dir]
+# Usage: bash download-jq.sh [options] [output_dir]
 # Default: ./bin/
 # =============================================================================
 
@@ -11,7 +11,7 @@ set -euo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${1:-${SCRIPT_DIR}/bin}"
+OUTPUT_DIR="${SCRIPT_DIR}/bin"
 JQ_VERSION="1.7.1"
 
 # Colors
@@ -249,34 +249,8 @@ EOF
     log_ok "jq wrapper created: ${wrapper_path}"
 }
 
-# Main function
-main() {
-    log_info "jq Downloader for Offline Deployment"
-    log_info "====================================="
-
-    # Check if we should download for all platforms or just current
-    if [ "${1:-}" = "--all" ]; then
-        download_jq_all_platforms
-    else
-        # Download for current platform only
-        local platform
-        platform=$(detect_platform)
-        download_jq "$platform"
-    fi
-
-    # Create wrapper script
-    create_jq_wrapper
-
-    log_info "====================================="
-    log_ok "jq download completed!"
-    log_info "Output directory: ${OUTPUT_DIR}"
-    log_info "Usage:"
-    log_info "  System jq: jq [options] <expression> [file...]"
-    log_info "  Bundled jq: bash ${OUTPUT_DIR}/jq-wrapper.sh [options] <expression> [file...]"
-}
-
 # Show help
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+show_help() {
     echo "jq Downloader for Offline Deployment"
     echo ""
     echo "Usage: bash download-jq.sh [options] [output_dir]"
@@ -292,8 +266,64 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "  bash download-jq.sh                    # Download for current platform"
     echo "  bash download-jq.sh --all              # Download for all platforms"
     echo "  bash download-jq.sh /path/to/bin       # Download to custom directory"
-    exit 0
-fi
+    echo "  bash download-jq.sh --all /path/to/bin # Download all platforms to custom directory"
+}
+
+# Main function
+main() {
+    log_info "jq Downloader for Offline Deployment"
+    log_info "====================================="
+
+    # Parse arguments
+    local download_all=false
+    local output_dir=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --all)
+                download_all=true
+                shift
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                output_dir="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Set output directory if provided
+    if [ -n "$output_dir" ]; then
+        OUTPUT_DIR="$output_dir"
+    fi
+
+    # Download jq
+    if [ "$download_all" = true ]; then
+        download_jq_all_platforms
+    else
+        # Download for current platform only
+        local platform
+        platform=$(detect_platform)
+        download_jq "$platform"
+    fi
+
+    # Create wrapper script
+    create_jq_wrapper
+
+    log_info "======================================="
+    log_ok "jq download completed!"
+    log_info "Output directory: ${OUTPUT_DIR}"
+    log_info "Usage:"
+    log_info "  System jq: jq [options] <expression> [file...]"
+    log_info "  Bundled jq: bash ${OUTPUT_DIR}/jq-wrapper.sh [options] <expression> [file...]"
+}
 
 # Run main function
 main "$@"
