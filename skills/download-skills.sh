@@ -17,6 +17,69 @@ GITHUB_REPO="anthropics/skills"
 GITHUB_BRANCH="main"
 MANIFEST_FILE="${SCRIPT_DIR}/skills-manifest.json"
 
+# jq command - use system jq if available, otherwise use bundled jq
+JQ_CMD=""
+
+# Initialize jq command
+init_jq() {
+    # Check if system jq is available
+    if command -v jq &> /dev/null; then
+        JQ_CMD="jq"
+        log_info "Using system jq: $(which jq)"
+        return 0
+    fi
+
+    # Check for bundled jq in script directory
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local bundled_jq=""
+
+    # Detect platform and architecture
+    local os
+    local arch
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "$os" in
+        Linux*)
+            case "$arch" in
+                x86_64|amd64)   bundled_jq="${script_dir}/bin/linux-amd64/jq" ;;
+                aarch64|arm64)   bundled_jq="${script_dir}/bin/linux-arm64/jq" ;;
+                armv7l|armhf)    bundled_jq="${script_dir}/bin/linux-armhf/jq" ;;
+            esac
+            ;;
+        Darwin*)
+            case "$arch" in
+                x86_64|amd64)   bundled_jq="${script_dir}/bin/macos-amd64/jq" ;;
+                arm64)           bundled_jq="${script_dir}/bin/macos-arm64/jq" ;;
+            esac
+            ;;
+        CYGWIN*|MINGW*|MSYS*)
+            bundled_jq="${script_dir}/bin/windows-amd64/jq.exe"
+            ;;
+    esac
+
+    # Use bundled jq if available
+    if [ -n "$bundled_jq" ] && [ -x "$bundled_jq" ]; then
+        JQ_CMD="$bundled_jq"
+        log_info "Using bundled jq: ${bundled_jq}"
+        return 0
+    fi
+
+    # Check for jq wrapper script
+    local wrapper_script="${script_dir}/bin/jq-wrapper.sh"
+    if [ -f "$wrapper_script" ] && [ -x "$wrapper_script" ]; then
+        JQ_CMD="bash ${wrapper_script}"
+        log_info "Using jq wrapper: ${wrapper_script}"
+        return 0
+    fi
+
+    # jq not found
+    log_error "jq not found (neither system nor bundled)"
+    log_error "Please install jq or run: bash download-jq.sh --all"
+    return 1
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,7 +105,14 @@ log_error() {
 
 # Check dependencies
 check_deps() {
-    local deps=("curl" "jq" "git")
+    # Initialize jq first (system or bundled)
+    if ! init_jq; then
+        log_error "Failed to initialize jq. Please install jq or run: bash download-jq.sh --all"
+        exit 1
+    fi
+
+    # Check for curl and git
+    local deps=("curl" "git")
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
             log_error "$dep is required but not installed"
@@ -173,16 +243,16 @@ download_directory() {
     fi
 
     # Download each item
-    echo "$response" | jq -r '.[] | @base64' | while read -r item; do
+    echo "$response" | $JQ_CMD -r '.[] | @base64' | while read -r item; do
         local item_name
         local item_type
         local item_download_url
         local item_path
 
-        item_name=$(echo "$item" | base64 -d | jq -r '.name' 2>/dev/null || continue)
-        item_type=$(echo "$item" | base64 -d | jq -r '.type' 2>/dev/null || continue)
-        item_download_url=$(echo "$item" | base64 -d | jq -r '.download_url // empty' 2>/dev/null || continue)
-        item_path=$(echo "$item" | base64 -d | jq -r '.path' 2>/dev/null || continue)
+        item_name=$(echo "$item" | base64 -d | $JQ_CMD -r '.name' 2>/dev/null || continue)
+        item_type=$(echo "$item" | base64 -d | $JQ_CMD -r '.type' 2>/dev/null || continue)
+        item_download_url=$(echo "$item" | base64 -d | $JQ_CMD -r '.download_url // empty' 2>/dev/null || continue)
+        item_path=$(echo "$item" | base64 -d | $JQ_CMD -r '.path' 2>/dev/null || continue)
 
         if [ "$item_type" == "file" ] && [ -n "$item_download_url" ] && [ "$item_download_url" != "null" ]; then
             curl -fsSL "$item_download_url" -o "$local_path/$item_name" 2>/dev/null || \
@@ -269,7 +339,7 @@ main() {
 
     # Parse manifest and download skills/plugins
     local skills_count
-    skills_count=$(jq -r '.skills | length' "$MANIFEST_FILE")
+    skills_count=$($JQ_CMD -r '.skills | length' "$MANIFEST_FILE")
     log_info "Found ${skills_count} entries in manifest"
 
     local skipped=0
@@ -284,13 +354,13 @@ main() {
         local entry_files
         local offline_compatible
 
-        entry_type=$(jq -r ".skills[\"${entry_name}\"].type // \"skill\"" "$MANIFEST_FILE")
-        entry_repo=$(jq -r ".skills[\"${entry_name}\"].repo" "$MANIFEST_FILE")
-        entry_path=$(jq -r ".skills[\"${entry_name}\"].path // \"\"" "$MANIFEST_FILE")
-        entry_files=$(jq -r ".skills[\"${entry_name}\"].files | join(\" \")" "$MANIFEST_FILE")
+        entry_type=$($JQ_CMD -r ".skills[\"${entry_name}\"].type // \"skill\"" "$MANIFEST_FILE")
+        entry_repo=$($JQ_CMD -r ".skills[\"${entry_name}\"].repo" "$MANIFEST_FILE")
+        entry_path=$($JQ_CMD -r ".skills[\"${entry_name}\"].path // \"\"" "$MANIFEST_FILE")
+        entry_files=$($JQ_CMD -r ".skills[\"${entry_name}\"].files | join(\" \")" "$MANIFEST_FILE")
         # jq treats boolean false as falsy, so // true would replace false with true
         # Use explicit null check instead
-        offline_compatible=$(jq -r "if .skills[\"${entry_name}\"].offline_compatible == null then \"true\" elif .skills[\"${entry_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
+        offline_compatible=$($JQ_CMD -r "if .skills[\"${entry_name}\"].offline_compatible == null then \"true\" elif .skills[\"${entry_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
 
         # Skip offline-incompatible entries
         if [ "$offline_compatible" = "false" ]; then
@@ -313,7 +383,7 @@ main() {
                 failed=$((failed + 1))
             fi
         fi
-    done < <(jq -r '.skills | keys[]' "$MANIFEST_FILE")
+    done < <($JQ_CMD -r '.skills | keys[]' "$MANIFEST_FILE")
 
     # Create index
     create_index
