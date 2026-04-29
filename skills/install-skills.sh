@@ -17,6 +17,69 @@ CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
 CLAUDE_PLUGINS_DIR="${HOME}/.claude/plugins"
 MANIFEST_FILE="${SKILLS_SOURCE}/skills-manifest.json"
 
+# jq command - use system jq if available, otherwise use bundled jq
+JQ_CMD=""
+
+# Initialize jq command
+init_jq() {
+    # Check if system jq is available
+    if command -v jq &> /dev/null; then
+        JQ_CMD="jq"
+        log_info "Using system jq: $(which jq)"
+        return 0
+    fi
+
+    # Check for bundled jq in script directory
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local bundled_jq=""
+
+    # Detect platform and architecture
+    local os
+    local arch
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "$os" in
+        Linux*)
+            case "$arch" in
+                x86_64|amd64)   bundled_jq="${script_dir}/bin/linux-amd64/jq" ;;
+                aarch64|arm64)   bundled_jq="${script_dir}/bin/linux-arm64/jq" ;;
+                armv7l|armhf)    bundled_jq="${script_dir}/bin/linux-armhf/jq" ;;
+            esac
+            ;;
+        Darwin*)
+            case "$arch" in
+                x86_64|amd64)   bundled_jq="${script_dir}/bin/macos-amd64/jq" ;;
+                arm64)           bundled_jq="${script_dir}/bin/macos-arm64/jq" ;;
+            esac
+            ;;
+        CYGWIN*|MINGW*|MSYS*)
+            bundled_jq="${script_dir}/bin/windows-amd64/jq.exe"
+            ;;
+    esac
+
+    # Use bundled jq if available
+    if [ -n "$bundled_jq" ] && [ -x "$bundled_jq" ]; then
+        JQ_CMD="$bundled_jq"
+        log_info "Using bundled jq: ${bundled_jq}"
+        return 0
+    fi
+
+    # Check for jq wrapper script
+    local wrapper_script="${script_dir}/bin/jq-wrapper.sh"
+    if [ -f "$wrapper_script" ] && [ -x "$wrapper_script" ]; then
+        JQ_CMD="bash ${wrapper_script}"
+        log_info "Using jq wrapper: ${wrapper_script}"
+        return 0
+    fi
+
+    # jq not found
+    log_error "jq not found (neither system nor bundled)"
+    log_error "Please install jq or run: bash download-jq.sh --all"
+    return 1
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -63,7 +126,7 @@ install_skill() {
         # Get marketplace name from manifest (repo field)
         local marketplace_name=""
         if [ -f "$MANIFEST_FILE" ]; then
-            marketplace_name=$(jq -r ".skills[\"${skill_name}\"].repo // empty" "$MANIFEST_FILE" 2>/dev/null)
+            marketplace_name=$($JQ_CMD -r ".skills[\"${skill_name}\"].repo // empty" "$MANIFEST_FILE" 2>/dev/null)
         fi
 
         # Fallback to skill_name if repo not found
@@ -101,7 +164,7 @@ install_skill() {
         # Get version from package.json if available
         local version="1.0.0"
         if [ -f "$cache_dir/package.json" ]; then
-            version=$(jq -r '.version // "1.0.0"' "$cache_dir/package.json" 2>/dev/null || echo "1.0.0")
+            version=$($JQ_CMD -r '.version // "1.0.0"' "$cache_dir/package.json" 2>/dev/null || echo "1.0.0")
             log_info "  Version: ${version}"
         fi
 
@@ -246,10 +309,10 @@ install_all_skills() {
         while IFS= read -r skill_name; do
             local skill_type
             local offline_compatible
-            skill_type=$(jq -r ".skills[\"${skill_name}\"].type // \"skill\"" "$MANIFEST_FILE")
+            skill_type=$($JQ_CMD -r ".skills[\"${skill_name}\"].type // \"skill\"" "$MANIFEST_FILE")
             # jq treats boolean false as falsy, so // true would replace false with true
             # Use explicit null check instead
-            offline_compatible=$(jq -r "if .skills[\"${skill_name}\"].offline_compatible == null then \"true\" elif .skills[\"${skill_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
+            offline_compatible=$($JQ_CMD -r "if .skills[\"${skill_name}\"].offline_compatible == null then \"true\" elif .skills[\"${skill_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
 
             # Skip offline-incompatible entries
             if [ "$offline_compatible" = "false" ]; then
@@ -271,7 +334,7 @@ install_all_skills() {
                 log_warn "Skill directory not found: ${skill_name}"
                 ((failed++)) || true
             fi
-        done < <(jq -r '.skills | keys[]' "$MANIFEST_FILE")
+        done < <($JQ_CMD -r '.skills | keys[]' "$MANIFEST_FILE")
     else
         # Use directory listing - install as skills by default
         for skill_dir in "$SKILLS_SOURCE"/*/; do
@@ -380,27 +443,27 @@ print_usage() {
     if [ -f "$MANIFEST_FILE" ]; then
         echo ""
         echo "  Document Processing:"
-        jq -r '.skills | to_entries[] | select(.value.category == "document" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+        $JQ_CMD -r '.skills | to_entries[] | select(.value.category == "document" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
 
         echo ""
         echo "  Design & Development:"
-        jq -r '.skills | to_entries[] | select(.value.category == "design" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+        $JQ_CMD -r '.skills | to_entries[] | select(.value.category == "design" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
 
         echo ""
         echo "  Testing:"
-        jq -r '.skills | to_entries[] | select(.value.category == "testing" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+        $JQ_CMD -r '.skills | to_entries[] | select(.value.category == "testing" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
 
         echo ""
         echo "  Tools:"
-        jq -r '.skills | to_entries[] | select(.value.category == "tool" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+        $JQ_CMD -r '.skills | to_entries[] | select(.value.category == "tool" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
 
         echo ""
         echo "  Enterprise:"
-        jq -r '.skills | to_entries[] | select(.value.category == "enterprise" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+        $JQ_CMD -r '.skills | to_entries[] | select(.value.category == "enterprise" and .value.type != "plugin") | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
 
         echo ""
         echo "  Plugins:"
-        jq -r '.skills | to_entries[] | select(.value.type == "plugin" and .value.offline_compatible != false) | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
+        $JQ_CMD -r '.skills | to_entries[] | select(.value.type == "plugin" and .value.offline_compatible != false) | "    - \(.key): \(.value.description)"' "$MANIFEST_FILE" 2>/dev/null || true
 
         echo ""
         echo "=== Plugin Setup Notes ==="
@@ -418,6 +481,12 @@ print_usage() {
 main() {
     log_info "Claude Code Skills & Plugins Installer"
     log_info "======================================="
+
+    # Initialize jq (system or bundled)
+    if ! init_jq; then
+        log_error "Failed to initialize jq. Please install jq or run: bash download-jq.sh --all"
+        exit 1
+    fi
 
     check_source
 
