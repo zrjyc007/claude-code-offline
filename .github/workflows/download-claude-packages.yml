@@ -451,6 +451,24 @@ jobs:
 
           du -sh claude-offline-packages/skills/
 
+      - name: Download jq for offline use
+        run: |
+          set -e
+          echo "=== Downloading jq for offline use ==="
+          cd "$GITHUB_WORKSPACE"
+
+          # Create bin directory
+          mkdir -p claude-offline-packages/skills/bin
+
+          # Download jq for all platforms using the download script
+          bash skills/download-jq.sh --all claude-offline-packages/skills/bin
+
+          echo "=== jq binaries downloaded ==="
+          ls -la claude-offline-packages/skills/bin/
+          echo ""
+          echo "Platform directories:"
+          ls -la claude-offline-packages/skills/bin/*/ 2>/dev/null || echo "  No platform directories found"
+
       - name: Copy setup script
         run: |
           echo "=== Copying setup script ==="
