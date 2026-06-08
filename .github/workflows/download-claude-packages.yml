@@ -562,27 +562,28 @@ jobs:
         id: changelog
         continue-on-error: true
         run: |
-          set -e
           CLAUDE_VERSION="${{ needs.check-version.outputs.latest_version }}"
           echo "=== Fetching changelog for Claude Code v${CLAUDE_VERSION} ==="
 
           # Download official changelog markdown from Claude Code docs
           CHANGELOG_URL="https://code.claude.com/docs/en/changelog.md"
-          curl -fsSL --max-time 30 "$CHANGELOG_URL" -o /tmp/changelog_full.md || {
+          if ! curl -fsSL --max-time 30 "$CHANGELOG_URL" -o /tmp/changelog_full.md 2>/dev/null; then
             echo "has_changelog=false" >> $GITHUB_OUTPUT
             echo "Failed to download changelog from $CHANGELOG_URL"
             exit 0
-          }
+          fi
 
           # Extract the section for the target version
           # Format: <Update label="X.Y.Z" description="Date">...content...</Update>
+          # Uses sub() instead of match(array) for mawk compatibility on Ubuntu runners
           awk -v ver="$CLAUDE_VERSION" '
             BEGIN { found=0; buf="" }
             /<Update label="[^"]*"/ {
-              match($0, /label="([^"]+)"/, m)
-              if (m[1] == ver) {
+              v = $0
+              sub(/.*label="/, "", v)
+              sub(/".*/, "", v)
+              if (v == ver) {
                 found=1
-                getline
                 next
               }
             }
@@ -654,14 +655,22 @@ jobs:
             echo "sha256sum -c claude-offline-packages.tar.gz.sha256"
             echo '```'
             echo ""
-            echo "### Features"
-            echo ""
-            echo "- ✅ Automatic mirror source detection"
-            echo "- ✅ Region restriction bypass"
-            echo "- ✅ Multi-language support (EN/ZH)"
-            echo "- ✅ Universal Node.js installation (supports Node 18, 20, 22, 25+)"
-            echo "- ✅ Uninstall support"
-            echo "- ✅ Offline .tgz package format for better compatibility"
+            # Show official Claude Code changelog as the main feature section
+            if [ "$HAS_CHANGELOG" = "true" ] && [ -s /tmp/changelog_body.md ]; then
+              echo "### Claude Code Updates"
+              echo ""
+              cat /tmp/changelog_body.md
+              echo ""
+            else
+              echo "### Features"
+              echo ""
+              echo "- ✅ Automatic mirror source detection"
+              echo "- ✅ Region restriction bypass"
+              echo "- ✅ Multi-language support (EN/ZH)"
+              echo "- ✅ Universal Node.js installation (supports Node 18, 20, 22, 25+)"
+              echo "- ✅ Uninstall support"
+              echo "- ✅ Offline .tgz package format for better compatibility"
+            fi
           } > /tmp/release_body.md
 
           echo "=== Release body generated ==="
