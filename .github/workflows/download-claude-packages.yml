@@ -655,21 +655,35 @@ jobs:
             echo "sha256sum -c claude-offline-packages.tar.gz.sha256"
             echo '```'
             echo ""
-            # Show official Claude Code changelog as the main feature section
-            if [ "$HAS_CHANGELOG" = "true" ] && [ -s /tmp/changelog_body.md ]; then
-              echo "### Claude Code Updates"
-              echo ""
-              cat /tmp/changelog_body.md
-              echo ""
-            else
-              echo "### Features"
-              echo ""
-              echo "- ✅ Automatic mirror source detection"
-              echo "- ✅ Region restriction bypass"
-              echo "- ✅ Multi-language support (EN/ZH)"
-              echo "- ✅ Universal Node.js installation (supports Node 18, 20, 22, 25+)"
-              echo "- ✅ Uninstall support"
-              echo "- ✅ Offline .tgz package format for better compatibility"
+            echo "### Package Contents"
+            echo ""
+
+            # Gather package metadata
+            PKG_SIZE=$(du -sh claude-offline-packages.tar.gz 2>/dev/null | cut -f1 || echo "N/A")
+            HAS_VSCODE=$(test -f claude-offline-packages/anthropic.claude-code.vsix && echo "✅ Included" || echo "❌ Not available")
+            SKILL_COUNT=$(find claude-offline-packages/skills/offline-skills -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+            JQ_PLATFORMS=$(ls claude-offline-packages/skills/bin/ 2>/dev/null | tr '\n' ', ' | sed 's/, $//')
+            [ -z "$JQ_PLATFORMS" ] && JQ_PLATFORMS="N/A"
+
+            echo "| Component | Detail |"
+            echo "|-----------|--------|"
+            echo "| Claude Code | v${CLAUDE_VERSION} |"
+            echo "| Node.js Support | ${{ env.NODE_VERSIONS }} |"
+            echo "| Build Date | ${BUILD_DATE} |"
+            echo "| Package Size | ${PKG_SIZE} |"
+            echo "| VSCode Extension | ${HAS_VSCODE} |"
+            echo "| Offline Skills | ${SKILL_COUNT} plugins |"
+            echo "| jq Platforms | ${JQ_PLATFORMS} |"
+            echo ""
+
+            echo "**Includes:**"
+            echo "- Claude Code CLI and platform-specific binaries"
+            echo "- Offline-compatible skills and plugins"
+            echo "- jq binaries for offline JSON processing"
+            echo "- One-click setup script (\`setup-claude-code.sh\`)"
+            echo "- Update checker (\`check-update.sh\`)"
+            if [ -f claude-offline-packages/anthropic.claude-code.vsix ]; then
+              echo "- VSCode extension (\`anthropic.claude-code.vsix\`)"
             fi
           } > /tmp/release_body.md
 
