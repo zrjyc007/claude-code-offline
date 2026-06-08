@@ -566,29 +566,46 @@ jobs:
           CLAUDE_VERSION="${{ needs.check-version.outputs.latest_version }}"
           echo "=== Fetching changelog for Claude Code v${CLAUDE_VERSION} ==="
 
-          # Install jq if not available
-          which jq || sudo apt-get install -y jq
+          # Download official changelog markdown from Claude Code docs
+          CHANGELOG_URL="https://code.claude.com/docs/en/changelog.md"
+          curl -fsSL --max-time 30 "$CHANGELOG_URL" -o /tmp/changelog_full.md || {
+            echo "has_changelog=false" >> $GITHUB_OUTPUT
+            echo "Failed to download changelog from $CHANGELOG_URL"
+            exit 0
+          }
 
-          # Fetch release notes from anthropics/claude-code GitHub repo
-          HTTP_CODE=$(curl -s -w "\n%{http_code}" -o /tmp/changelog_response.json \
-            "https://api.github.com/repos/anthropics/claude-code/releases/tags/v${CLAUDE_VERSION}")
+          # Extract the section for the target version
+          # Format: <Update label="X.Y.Z" description="Date">...content...</Update>
+          awk -v ver="$CLAUDE_VERSION" '
+            BEGIN { found=0; buf="" }
+            /<Update label="[^"]*"/ {
+              match($0, /label="([^"]+)"/, m)
+              if (m[1] == ver) {
+                found=1
+                getline
+                next
+              }
+            }
+            /<\/Update>/ {
+              if (found) {
+                print buf
+                exit 0
+              }
+            }
+            found {
+              # Strip leading "  * " bullet prefix to plain markdown
+              gsub(/^  \* /, "- ")
+              buf = buf $0 "\n"
+            }
+          ' /tmp/changelog_full.md > /tmp/changelog_body.md
 
-          if [ "$HTTP_CODE" = "200" ]; then
-            # Extract the release body
-            CHANGELOG_BODY=$(jq -r '.body // empty' /tmp/changelog_response.json)
-
-            if [ -n "$CHANGELOG_BODY" ] && [ "$CHANGELOG_BODY" != "null" ] && [ ${#CHANGELOG_BODY} -gt 5 ]; then
-              # Save changelog to file for the release body step
-              printf '%s' "$CHANGELOG_BODY" > /tmp/changelog_body.md
-              echo "has_changelog=true" >> $GITHUB_OUTPUT
-              echo "Changelog fetched (${#CHANGELOG_BODY} chars)"
-            else
-              echo "has_changelog=false" >> $GITHUB_OUTPUT
-              echo "Changelog body is empty"
-            fi
+          if [ -s /tmp/changelog_body.md ]; then
+            CHANGELOG_LEN=$(wc -c < /tmp/changelog_body.md | tr -d ' ')
+            echo "has_changelog=true" >> $GITHUB_OUTPUT
+            echo "Changelog fetched for v${CLAUDE_VERSION} (${CHANGELOG_LEN} chars)"
           else
             echo "has_changelog=false" >> $GITHUB_OUTPUT
-            echo "No release found on anthropics/claude-code (HTTP $HTTP_CODE)"
+            echo "No changelog entry found for v${CLAUDE_VERSION}"
           fi
 
       - name: Generate release body
