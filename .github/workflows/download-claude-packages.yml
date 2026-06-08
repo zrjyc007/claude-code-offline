@@ -134,16 +134,20 @@ jobs:
 
           echo "=== Downloading packages as tarballs ==="
 
+          # Use the version determined by check-version job
+          TARGET_VERSION="${{ needs.check-version.outputs.latest_version }}"
+          echo "Target version: $TARGET_VERSION"
+
           # Create working directory
           mkdir -p claude-offline-packages
           cd claude-offline-packages
 
           # Download packages as tarballs
-          echo "=== Downloading @anthropic-ai/claude-code ==="
-          npm pack @anthropic-ai/claude-code --pack-destination .
+          echo "=== Downloading @anthropic-ai/claude-code@${TARGET_VERSION} ==="
+          npm pack "@anthropic-ai/claude-code@${TARGET_VERSION}" --pack-destination .
           CLAUDE_TGZ=$(ls -t anthropic-ai-claude-code-*.tgz 2>/dev/null | head -1 || true)
           # Rename to short name (matching 7z package)
-          CLAUDE_VERSION="$(npm view @anthropic-ai/claude-code version)"
+          CLAUDE_VERSION="$TARGET_VERSION"
           mv "$CLAUDE_TGZ" "claude-code-${CLAUDE_VERSION}.tgz"
           echo "Downloaded: claude-code-${CLAUDE_VERSION}.tgz"
 
