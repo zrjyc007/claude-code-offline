@@ -16,7 +16,7 @@ on:
   # Weekly full rebuild every Monday at 00:00 UTC
   schedule:
     - cron: '0 0 * * *'   # Daily
-    - cron: '0 0 * * 1'   # Weekly (Monday)
+    - cron: '0 1 * * 1'   # Weekly (Monday 01:00, offset to avoid double-run)
 
 env:
   NODE_VERSION: '20'
@@ -158,28 +158,23 @@ jobs:
           # Download optional dependencies that may be needed
           echo "=== Downloading additional dependencies ==="
 
-          # sharp and related packages (commonly needed)
-          npm pack @img/sharp-linux-x64 --pack-destination . 2>/dev/null || echo "sharp-linux-x64 not available"
-          if ls img-sharp-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_ORIG=$(ls -t img-sharp-linux-x64-*.tgz 2>/dev/null | head -1 || true)
-            SHARP_VER=$(echo "$SHARP_ORIG" | sed 's/img-sharp-linux-x64-//' | sed 's/.tgz//')
-            mv "$SHARP_ORIG" "sharp-linux-x64-${SHARP_VER}.tgz"
-          fi
+          # Helper: pack and rename tarball to short name
+          pack_rename() {
+            local pkg="$1"
+            local prefix="$2"
+            npm pack "$pkg" --pack-destination . 2>/dev/null || { echo "$pkg not available"; return; }
+            local orig
+            orig=$(ls -t "${prefix}"-*.tgz 2>/dev/null | head -1 || true)
+            if [ -n "$orig" ]; then
+              local ver
+              ver=$(echo "$orig" | sed "s/${prefix}-//" | sed 's/.tgz//')
+              mv "$orig" "${prefix}-${ver}.tgz"
+            fi
+          }
 
-          npm pack @img/sharp-libvips-linux-x64 --pack-destination . 2>/dev/null || echo "sharp-libvips-linux-x64 not available"
-          if ls img-sharp-libvips-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_VIPS_ORIG=$(ls -t img-sharp-libvips-linux-x64-*.tgz 2>/dev/null | head -1 || true)
-            SHARP_VIPS_VER=$(echo "$SHARP_VIPS_ORIG" | sed 's/img-sharp-libvips-linux-x64-//' | sed 's/.tgz//')
-            mv "$SHARP_VIPS_ORIG" "sharp-libvips-linux-x64-${SHARP_VIPS_VER}.tgz"
-          fi
-
-          # claude-code-router (useful tool)
-          npm pack @musistudio/claude-code-router --pack-destination . 2>/dev/null || echo "claude-code-router not available"
-          if ls musistudio-claude-code-router-*.tgz 1>/dev/null 2>&1; then
-            ROUTER_ORIG=$(ls -t musistudio-claude-code-router-*.tgz 2>/dev/null | head -1 || true)
-            ROUTER_VER=$(echo "$ROUTER_ORIG" | sed 's/musistudio-claude-code-router-//' | sed 's/.tgz//')
-            mv "$ROUTER_ORIG" "claude-code-router-${ROUTER_VER}.tgz"
-          fi
+          pack_rename "@img/sharp-linux-x64" "img-sharp-linux-x64"
+          pack_rename "@img/sharp-libvips-linux-x64" "img-sharp-libvips-linux-x64"
+          pack_rename "@musistudio/claude-code-router" "musistudio-claude-code-router"
 
           echo "=== Downloaded packages (renamed to match 7z format) ==="
           ls -la *.tgz
