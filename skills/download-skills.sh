@@ -17,91 +17,11 @@ GITHUB_REPO="anthropics/skills"
 GITHUB_BRANCH="main"
 MANIFEST_FILE="${SCRIPT_DIR}/skills-manifest.json"
 
-# jq command - use system jq if available, otherwise use bundled jq
+# Source common utilities
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# jq command - will be set by init_jq
 JQ_CMD=""
-
-# Initialize jq command
-init_jq() {
-    # Check if system jq is available
-    if command -v jq &> /dev/null; then
-        JQ_CMD="jq"
-        log_info "Using system jq: $(which jq)"
-        return 0
-    fi
-
-    # Check for bundled jq in script directory
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local bundled_jq=""
-
-    # Detect platform and architecture
-    local os
-    local arch
-    os="$(uname -s)"
-    arch="$(uname -m)"
-
-    case "$os" in
-        Linux*)
-            case "$arch" in
-                x86_64|amd64)   bundled_jq="${script_dir}/bin/linux-amd64/jq" ;;
-                aarch64|arm64)   bundled_jq="${script_dir}/bin/linux-arm64/jq" ;;
-                armv7l|armhf)    bundled_jq="${script_dir}/bin/linux-armhf/jq" ;;
-            esac
-            ;;
-        Darwin*)
-            case "$arch" in
-                x86_64|amd64)   bundled_jq="${script_dir}/bin/macos-amd64/jq" ;;
-                arm64)           bundled_jq="${script_dir}/bin/macos-arm64/jq" ;;
-            esac
-            ;;
-        CYGWIN*|MINGW*|MSYS*)
-            bundled_jq="${script_dir}/bin/windows-amd64/jq.exe"
-            ;;
-    esac
-
-    # Use bundled jq if available
-    if [ -n "$bundled_jq" ] && [ -x "$bundled_jq" ]; then
-        JQ_CMD="$bundled_jq"
-        log_info "Using bundled jq: ${bundled_jq}"
-        return 0
-    fi
-
-    # Check for jq wrapper script
-    local wrapper_script="${script_dir}/bin/jq-wrapper.sh"
-    if [ -f "$wrapper_script" ] && [ -x "$wrapper_script" ]; then
-        JQ_CMD="bash ${wrapper_script}"
-        log_info "Using jq wrapper: ${wrapper_script}"
-        return 0
-    fi
-
-    # jq not found
-    log_error "jq not found (neither system nor bundled)"
-    log_error "Please install jq or run: bash download-jq.sh --all"
-    return 1
-}
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_ok() {
-    echo -e "${GREEN}[OK]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
 
 # Check dependencies
 check_deps() {
@@ -121,147 +41,55 @@ check_deps() {
     done
 }
 
-# Download a single skill (from anthropics/skills format)
-download_skill() {
-    local skill_name="$1"
-    local skill_repo="$2"
-    local skill_path="$3"
-    local skill_files="$4"
-    local output_path="${OUTPUT_DIR}/${skill_name}"
-    local branch="${GITHUB_BRANCH}"
+# Download a skill or plugin via shallow git clone
+# This avoids GitHub API rate limits and is faster for multi-file entries
+download_entry() {
+    local entry_name="$1"
+    local entry_repo="$2"
+    local entry_path="$3"
+    local entry_files="$4"
+    local entry_type="${5:-skill}"
+    local output_path="${OUTPUT_DIR}/${entry_name}"
 
-    log_info "Downloading skill: ${skill_name} (from ${skill_repo})"
-
+    log_info "Downloading ${entry_type}: ${entry_name} (from ${entry_repo})"
     mkdir -p "$output_path"
 
-    # Build base path for raw files
-    local base_path="$skill_path"
-    if [ -n "$base_path" ]; then
-        base_path="${base_path}/"
-    fi
+    local clone_dir="/tmp/${entry_name}-clone-$$"
+    local repo_url="https://github.com/${entry_repo}"
 
-    # Download each file/directory
-    for file in $skill_files; do
-        if [[ "$file" == */ ]]; then
-            # It's a directory - need to get contents
-            log_info "  Downloading directory: ${file}"
-            local dir_path="${base_path}${file%/}"
-            download_directory "$skill_repo" "$branch" "$dir_path" "$output_path/$file"
-        else
-            # It's a file
-            local file_url="https://raw.githubusercontent.com/${skill_repo}/${branch}/${base_path}${file}"
-            log_info "  Downloading: ${file}"
-            if curl -fsSL "$file_url" -o "$output_path/$file" 2>/dev/null; then
-                : # Success
-            else
-                log_warn "  Failed to download: ${file}"
-            fi
-        fi
-    done
-
-    log_ok "Skill '${skill_name}' downloaded"
-    return 0
-}
-
-# Download a plugin (full repo clone, preserved as git repository)
-download_plugin() {
-    local plugin_name="$1"
-    local plugin_repo="$2"
-    local plugin_path="$3"
-    local plugin_files="$4"
-    local output_path="${OUTPUT_DIR}/${plugin_name}"
-
-    log_info "Downloading plugin: ${plugin_name} (from ${plugin_repo})"
-
-    # Clone repo with shallow depth
-    local clone_dir="/tmp/${plugin_name}-clone-$$"
-    local repo_url="https://github.com/${plugin_repo}"
-
-    log_info "  Cloning repository: ${repo_url}"
-
-    # Clone with visible errors
-    if git clone --depth 1 "$repo_url" "$clone_dir" 2>&1; then
-        # Create output directory
-        mkdir -p "$output_path"
-
-        # Determine source base directory
-        local src_base="$clone_dir"
-        if [ -n "$plugin_path" ] && [ "$plugin_path" != "" ]; then
-            src_base="$clone_dir/${plugin_path}"
-            if [ ! -d "$src_base" ]; then
-                log_warn "  Path ${plugin_path} not found in repo, using root"
-                src_base="$clone_dir"
-            else
-                log_info "  Using path: ${plugin_path}"
-            fi
-        fi
-
-        # Copy the entire plugin directory preserving git repository structure
-        # This ensures plugins are proper git repositories that can be tracked
-        log_info "  Copying plugin directory (preserving .git)"
-        cp -r "$clone_dir"/* "$output_path/" 2>/dev/null || true
-
-        # Also copy .git directory if it exists
-        if [ -d "$clone_dir/.git" ]; then
-            log_info "  Copying .git directory"
-            cp -r "$clone_dir/.git" "$output_path/" 2>/dev/null || true
-        fi
-
-        # Cleanup clone directory
-        rm -rf "$clone_dir"
-        log_ok "Plugin '${plugin_name}' downloaded (git repository preserved)"
-        return 0
-    else
-        log_error "  Failed to clone repository: ${repo_url}"
+    if ! git clone --depth 1 "$repo_url" "$clone_dir" 2>&1; then
+        log_error "  Failed to clone: ${repo_url}"
         rm -rf "$clone_dir"
         return 1
     fi
-}
 
-# Download directory contents
-download_directory() {
-    local repo="$1"
-    local branch="$2"
-    local repo_path="$3"
-    local local_path="$4"
-
-    mkdir -p "$local_path"
-
-    # Get directory listing from GitHub API
-    local api_url="https://api.github.com/repos/${repo}/contents/${repo_path}?ref=${branch}"
-    local response
-
-    response=$(curl -s "$api_url") || {
-        log_warn "  Failed to fetch API: ${repo_path}"
-        return 0
-    }
-
-    # Check if response is valid JSON array
-    if ! echo "$response" | jq -e 'if type == "array" then true else false end' > /dev/null 2>&1; then
-        log_warn "  Failed to list directory: ${repo_path}"
-        return 0
+    local src_base="$clone_dir"
+    if [ -n "$entry_path" ]; then
+        src_base="$clone_dir/${entry_path}"
+        if [ ! -d "$src_base" ]; then
+            log_warn "  Path ${entry_path} not found in repo, using root"
+            src_base="$clone_dir"
+        fi
     fi
 
-    # Download each item
-    echo "$response" | $JQ_CMD -r '.[] | @base64' | while read -r item; do
-        local item_name
-        local item_type
-        local item_download_url
-        local item_path
-
-        item_name=$(echo "$item" | base64 -d | $JQ_CMD -r '.name' 2>/dev/null || continue)
-        item_type=$(echo "$item" | base64 -d | $JQ_CMD -r '.type' 2>/dev/null || continue)
-        item_download_url=$(echo "$item" | base64 -d | $JQ_CMD -r '.download_url // empty' 2>/dev/null || continue)
-        item_path=$(echo "$item" | base64 -d | $JQ_CMD -r '.path' 2>/dev/null || continue)
-
-        if [ "$item_type" == "file" ] && [ -n "$item_download_url" ] && [ "$item_download_url" != "null" ]; then
-            curl -fsSL "$item_download_url" -o "$local_path/$item_name" 2>/dev/null || \
-                log_warn "    Failed: ${item_name}"
-        elif [ "$item_type" == "dir" ]; then
-            download_directory "$repo" "$branch" "$item_path" "$local_path/$item_name"
+    for file in $entry_files; do
+        local src="$src_base/$file"
+        local dst="$output_path/$file"
+        if [ -e "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp -r "$src" "$dst" 2>/dev/null || log_warn "  Failed to copy: ${file}"
+        else
+            log_warn "  Not found in repo: ${file}"
         fi
     done
 
+    # For plugins, preserve .git directory
+    if [ "$entry_type" = "plugin" ] && [ -d "$clone_dir/.git" ]; then
+        cp -r "$clone_dir/.git" "$output_path/" 2>/dev/null || true
+    fi
+
+    rm -rf "$clone_dir"
+    log_ok "${entry_type} '${entry_name}' downloaded"
     return 0
 }
 
@@ -346,44 +174,33 @@ main() {
     local failed=0
     local succeeded=0
 
-    # Use process substitution instead of pipe to avoid subshell variable isolation
-    while read -r entry_name; do
-        local entry_type
-        local entry_repo
-        local entry_path
-        local entry_files
-        local offline_compatible
+    # Single-pass jq: extract all skill data at once, then download in parallel
+    local tmp_results
+    tmp_results=$(mktemp)
 
-        entry_type=$($JQ_CMD -r ".skills[\"${entry_name}\"].type // \"skill\"" "$MANIFEST_FILE")
-        entry_repo=$($JQ_CMD -r ".skills[\"${entry_name}\"].repo" "$MANIFEST_FILE")
-        entry_path=$($JQ_CMD -r ".skills[\"${entry_name}\"].path // \"\"" "$MANIFEST_FILE")
-        entry_files=$($JQ_CMD -r ".skills[\"${entry_name}\"].files | join(\" \")" "$MANIFEST_FILE")
-        # jq treats boolean false as falsy, so // true would replace false with true
-        # Use explicit null check instead
-        offline_compatible=$($JQ_CMD -r "if .skills[\"${entry_name}\"].offline_compatible == null then \"true\" elif .skills[\"${entry_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
-
+    while IFS=$'\t' read -r entry_name entry_type entry_repo entry_path entry_files offline_compatible; do
         # Skip offline-incompatible entries
         if [ "$offline_compatible" = "false" ]; then
             log_warn "Skipping '${entry_name}' - offline_compatible=false"
-            skipped=$((skipped + 1))
+            echo "skipped" >> "$tmp_results"
             continue
         fi
 
-        # Download based on type
-        if [ "$entry_type" = "plugin" ]; then
-            if download_plugin "$entry_name" "$entry_repo" "$entry_path" "$entry_files"; then
-                succeeded=$((succeeded + 1))
+        # Download in parallel
+        (
+            if download_entry "$entry_name" "$entry_repo" "$entry_path" "$entry_files" "$entry_type"; then
+                echo "ok" >> "$tmp_results"
             else
-                failed=$((failed + 1))
+                echo "fail" >> "$tmp_results"
             fi
-        else
-            if download_skill "$entry_name" "$entry_repo" "$entry_path" "$entry_files"; then
-                succeeded=$((succeeded + 1))
-            else
-                failed=$((failed + 1))
-            fi
-        fi
-    done < <($JQ_CMD -r '.skills | keys[]' "$MANIFEST_FILE")
+        ) &
+    done < <($JQ_CMD -r '.skills | to_entries[] | [.key, .value.type // "skill", .value.repo, .value.path // "", (.value.files | join(" ")), (if .value.offline_compatible == null then "true" elif .value.offline_compatible == false then "false" else "true" end)] | @tsv' "$MANIFEST_FILE")
+    wait
+
+    succeeded=$(grep -c "^ok$" "$tmp_results" 2>/dev/null || echo 0)
+    failed=$(grep -c "^fail$" "$tmp_results" 2>/dev/null || echo 0)
+    skipped=$(grep -c "^skipped$" "$tmp_results" 2>/dev/null || echo 0)
+    rm -f "$tmp_results"
 
     # Create index
     create_index
