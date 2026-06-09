@@ -20,6 +20,50 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Convert to absolute path in case it's relative
 SCRIPT_DIR="$(cd "$SCRIPT_DIR" && pwd)"
+
+# Source common utilities (if available)
+if [ -f "${SCRIPT_DIR}/skills/lib/common.sh" ]; then
+    source "${SCRIPT_DIR}/skills/lib/common.sh"
+fi
+
+# Fallback definitions if common.sh was not sourced
+if ! type log_info >/dev/null 2>&1; then
+    log_info() { echo "[INFO] $1"; }
+    log_ok()   { echo "  [OK] $1"; }
+    log_warn() { echo "  [WARN] $1"; }
+    log_error(){ echo "  [ERROR] $1" >&2; }
+fi
+if ! type command_exists >/dev/null 2>&1; then
+    command_exists() { command -v "$1" >/dev/null 2>&1; }
+fi
+if ! type test_url_accessible >/dev/null 2>&1; then
+    test_url_accessible() {
+        local url="$1" timeout="${2:-10}"
+        if command_exists curl; then
+            curl -fsSL --max-time "$timeout" --retry 2 -I "$url" >/dev/null 2>&1
+        elif command_exists wget; then
+            wget --timeout="$timeout" --tries=2 -q --spider "$url" 2>/dev/null
+        else
+            return 1
+        fi
+    }
+fi
+if ! type download_with_mirrors >/dev/null 2>&1; then
+    download_with_mirrors() {
+        local output_file="$1"; shift; local mirrors=("$@"); local success=false
+        for mirror in "${mirrors[@]}"; do
+            log_info "Trying mirror: $mirror"
+            if command_exists curl; then
+                curl -fsSL --max-time 10 --retry 2 -o "$output_file" "$mirror" 2>/dev/null && { success=true; log_ok "Downloaded from: $mirror"; break; }
+            elif command_exists wget; then
+                wget --timeout=10 --tries=2 -q -O "$output_file" "$mirror" 2>/dev/null && { success=true; log_ok "Downloaded from: $mirror"; break; }
+            fi
+            log_warn "Failed to download from: $mirror"
+        done
+        [ "$success" = true ]
+    }
+fi
+
 USER_CLAUDE_DIR="$HOME/.claude"
 USER_TMPDIR="$HOME/.claude/tmp"
 BASHRC="$HOME/.bashrc"
@@ -428,94 +472,260 @@ WSLFIX
 # Helper Functions
 # ---------------------------------------------------------------------------
 
-log_info() {
-    echo "[INFO] $1"
-}
+# Common utilities (log_*, command_exists, test_url_accessible, download_with_mirrors)
+# are sourced from skills/lib/common.sh above.
 
-log_ok() {
-    echo "  [OK] $1"
-}
+# ---------------------------------------------------------------------------
+# Config File Generators (used by both --config-only and normal mode)
+# ---------------------------------------------------------------------------
 
-log_warn() {
-    echo "  [WARN] $1"
-}
-
-log_error() {
-    echo "  [ERROR] $1" >&2
-}
-
-# 检查命令是否存在
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Test if URL is accessible
-test_url_accessible() {
-    local url="$1"
-    local timeout="${2:-$NETWORK_TIMEOUT}"
-    
-    if command_exists curl; then
-        curl -fsSL --max-time "$timeout" --retry "$CURL_RETRY" -I "$url" >/dev/null 2>&1
-    elif command_exists wget; then
-        wget --timeout="$timeout" --tries="$CURL_RETRY" -q --spider "$url" 2>/dev/null
+generate_settings_json() {
+    local settings_file="$USER_CLAUDE_DIR/settings.json"
+    if [ -f "$settings_file" ]; then
+        local backup_name="settings.json.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$settings_file" "$USER_CLAUDE_DIR/backups/$backup_name"
+        log_warn "settings.json already exists. Backed up to backups/$backup_name"
     else
-        return 1
+        cat > "$settings_file" << 'SETTINGSJSON'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "YOUR_BASE_URL_HERE",
+    "ANTHROPIC_API_KEY": "YOUR_API_KEY_HERE",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "YOUR_MODEL_HERE",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "YOUR_MODEL_HERE",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "YOUR_MODEL_HERE",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_SKIP_FIRST_RUN": "1",
+    "CLAUDE_CODE_TELEMETRY": "0",
+    "DISABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_WEB_FETCH_SKIP_SAFETY_CHECK": "1"
+  },
+  "autoUpdate": { "enabled": false },
+  "hasCompletedOnboarding": true,
+  "skipOnboarding": true,
+  "telemetry": { "enabled": false }
+}
+SETTINGSJSON
+        log_ok "Created settings.json with placeholder values"
     fi
 }
 
-# Download file (with mirror fallback)
-download_with_mirrors() {
-    local output_file="$1"
+generate_config_json() {
+    local config_file="$USER_CLAUDE_DIR/config.json"
+    if [ -f "$config_file" ]; then
+        log_ok "config.json already exists"
+    else
+        cat > "$config_file" << 'CONFIGJSON'
+{ "primaryApiKey": "mimo" }
+CONFIGJSON
+        log_ok "Created config.json"
+    fi
+}
+
+generate_claude_json() {
+    local claude_json="$HOME/.claude.json"
+    local first_start
+    first_start=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+    if [ -f "$claude_json" ]; then
+        local backup_name=".claude.json.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$claude_json" "$USER_CLAUDE_DIR/backups/$backup_name"
+
+        if command_exists python3; then
+            python3 -c "
+import json, sys
+try:
+    with open('$claude_json', 'r') as f:
+        data = json.load(f)
+    data['hasCompletedOnboarding'] = True
+    with open('$claude_json', 'w') as f:
+        json.dump(data, f, indent=2)
+except Exception as e:
+    pass
+" 2>/dev/null || true
+        elif command_exists jq; then
+            jq '.hasCompletedOnboarding = true' "$claude_json" > "$claude_json.tmp" && mv "$claude_json.tmp" "$claude_json" 2>/dev/null || true
+        fi
+        log_ok "Updated .claude.json (backed up to backups/$backup_name)"
+    else
+        cat > "$claude_json" << CLAUDEJSON
+{
+  "hasCompletedOnboarding": true,
+  "firstStartTime": "$first_start",
+  "skipOnboarding": true,
+  "onboardingCompleted": true,
+  "hasSeenInitialMessage": true,
+  "hasAcceptedTerms": true,
+  "telemetry": {
+    "enabled": false,
+    "consentGiven": false
+  },
+  "regionCheck": {
+    "bypassed": true,
+    "checkedAt": "$first_start"
+  }
+}
+CLAUDEJSON
+        log_ok "Created .claude.json"
+    fi
+}
+
+generate_claude_wrapper() {
+    local wrapper="$USER_CLAUDE_DIR/claude-wrapper.sh"
+    cat > "$wrapper" << 'WRAPPER'
+#!/usr/bin/env bash
+# Claude Code Wrapper Script
+# This script sets up necessary environment variables to bypass region checks
+
+# 禁用自动更新
+export DISABLE_AUTOUPDATER=1
+
+# 禁用遥测
+export CLAUDE_CODE_TELEMETRY=0
+export DISABLE_TELEMETRY=1
+
+# 跳过首次运行检查
+export CLAUDE_CODE_SKIP_FIRST_RUN=1
+
+# 跳过引导流程
+export CLAUDE_CODE_SKIP_ONBOARDING=1
+
+# 禁用 Web Tool 的域名安全检查（离线环境下无法连接 claude.ai 验证）
+# 这样 Web Tool 会直接获取网页内容而不需要安全检查
+export CLAUDE_CODE_WEB_FETCH_SKIP_SAFETY_CHECK=1
+
+# 设置 API 配置（如果用户已配置）
+if [ -f "$HOME/.claude/settings.json" ]; then
+    # Try to read API configuration from settings.json
+    if command -v jq >/dev/null 2>&1; then
+        BASE_URL=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+        API_KEY=$(jq -r '.env.ANTHROPIC_API_KEY // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+        [ -n "$BASE_URL" ] && export ANTHROPIC_BASE_URL="$BASE_URL"
+        [ -n "$API_KEY" ] && export ANTHROPIC_API_KEY="$API_KEY"
+    fi
+fi
+
+# Execute original claude command
+exec claude "$@"
+WRAPPER
+    chmod +x "$wrapper"
+    log_ok "Created claude-wrapper.sh"
+}
+
+generate_clean_tmp() {
+    local script="$USER_CLAUDE_DIR/clean-tmp.sh"
+    cat > "$script" << 'CLEANTMP'
+#!/usr/bin/env bash
+# Clean Claude Code tmp directory
+
+TMPDIR="$HOME/.claude/tmp"
+
+echo "Claude Code TMP Directory Cleaner"
+echo "=================================="
+echo ""
+
+if [ ! -d "$TMPDIR" ]; then
+    echo "TMP directory does not exist: $TMPDIR"
+    exit 0
+fi
+
+# Show current size
+SIZE=$(du -sh "$TMPDIR" 2>/dev/null | cut -f1)
+echo "Current TMP directory size: $SIZE"
+echo ""
+
+# Count files
+FILE_COUNT=$(find "$TMPDIR" -type f 2>/dev/null | wc -l)
+echo "Number of files: $FILE_COUNT"
+echo ""
+
+read -p "Do you want to clean the TMP directory? [y/N]: " -n 1 -r
+echo ""
+
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Cleanup cancelled."
+    exit 0
+fi
+
+echo ""
+echo "Select cleanup option:"
+echo "  1) Clean items older than 7 days"
+echo "  2) Clean items older than 3 days"
+echo "  3) Clean everything"
+echo ""
+read -p "Select option [1-3]: " -r option
+
+case $option in
+    1)
+        FIND_MTIME=7
+        ;;
+    2)
+        FIND_MTIME=3
+        ;;
+    3)
+        FIND_MTIME=0
+        ;;
+    *)
+        echo "Invalid option. Cancelling."
+        exit 1
+        ;;
+esac
+
+# Show what will be deleted
+echo ""
+echo "The following items will be deleted:"
+if [ "$FIND_MTIME" -eq 0 ]; then
+    find "$TMPDIR" -mindepth 1 -exec ls -ld {} \;
+else
+    find "$TMPDIR" -mindepth 1 -mtime +$FIND_MTIME -exec ls -ld {} \;
+fi
+
+echo ""
+read -p "Confirm deletion? [y/N]: " -n 1 -r
+echo ""
+
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Cleanup cancelled."
+    exit 0
+fi
+
+# Perform cleanup
+if [ "$FIND_MTIME" -eq 0 ]; then
+    rm -rf "$TMPDIR"/*
+    rm -rf "$TMPDIR"/.* 2>/dev/null || true
+else
+    find "$TMPDIR" -mindepth 1 -mtime +$FIND_MTIME -delete
+fi
+
+NEW_SIZE=$(du -sh "$TMPDIR" 2>/dev/null | cut -f1)
+echo ""
+echo "Cleanup complete. New size: $NEW_SIZE"
+CLEANTMP
+    chmod +x "$script"
+    log_ok "Created clean-tmp.sh"
+}
+
+# Generic mirror speed test
+select_fastest_mirror() {
+    local name="$1"
     shift
     local mirrors=("$@")
-    local success=false
-    
-    for mirror in "${mirrors[@]}"; do
-        log_info "Trying mirror: $mirror"
-        
-        if command_exists curl; then
-            if curl -fsSL --max-time "$NETWORK_TIMEOUT" --retry "$CURL_RETRY" \
-                    -o "$output_file" "$mirror" 2>/dev/null; then
-                success=true
-                log_ok "Downloaded from: $mirror"
-                break
-            fi
-        elif command_exists wget; then
-            if wget --timeout="$NETWORK_TIMEOUT" --tries="$CURL_RETRY" \
-                    -q -O "$output_file" "$mirror" 2>/dev/null; then
-                success=true
-                log_ok "Downloaded from: $mirror"
-                break
-            fi
-        fi
-        
-        log_warn "Failed to download from: $mirror"
-    done
-    
-    if [ "$success" = true ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Select fastest Node.js mirror
-select_fastest_node_mirror() {
-    log_info "Testing Node.js mirrors for best speed..."
-    
-    local best_mirror="${NODE_MIRRORS[0]}"
+    local best_mirror="${mirrors[0]}"
     local min_time=9999
-    
-    for mirror in "${NODE_MIRRORS[@]}"; do
+
+    log_info "Testing ${name} mirrors for best speed..."
+
+    for mirror in "${mirrors[@]}"; do
         local start_time end_time elapsed
         start_time=$(date +%s%N 2>/dev/null || echo "$(date +%s)000000000")
-        
+
         if test_url_accessible "$mirror" 3; then
             end_time=$(date +%s%N 2>/dev/null || echo "$(date +%s)000000000")
-            elapsed=$(( (end_time - start_time) / 1000000 ))  # 转换为毫秒
-            
+            elapsed=$(( (end_time - start_time) / 1000000 ))
+
             log_info "  $mirror: ${elapsed}ms"
-            
+
             if [ "$elapsed" -lt "$min_time" ]; then
                 min_time=$elapsed
                 best_mirror="$mirror"
@@ -524,76 +734,15 @@ select_fastest_node_mirror() {
             log_warn "  $mirror: UNREACHABLE"
         fi
     done
-    
-    log_ok "Selected Node.js mirror: $best_mirror"
+
+    log_ok "Selected ${name} mirror: $best_mirror"
     echo "$best_mirror"
 }
 
-# Select fastest npm registry mirror
-select_fastest_npm_mirror() {
-    log_info "Testing npm registry mirrors for best speed..."
-    
-    local best_mirror="${NPM_MIRRORS[0]}"
-    local min_time=9999
-    
-    for mirror in "${NPM_MIRRORS[@]}"; do
-        local start_time end_time elapsed
-        start_time=$(date +%s%N 2>/dev/null || echo "$(date +%s)000000000")
-        
-        # Test registry availability
-        if command_exists curl; then
-            if curl -fsSL --max-time 5 "$mirror/@anthropic-ai/claude-code" >/dev/null 2>&1; then
-                end_time=$(date +%s%N 2>/dev/null || echo "$(date +%s)000000000")
-                elapsed=$(( (end_time - start_time) / 1000000 ))
-                
-                log_info "  $mirror: ${elapsed}ms"
-                
-                if [ "$elapsed" -lt "$min_time" ]; then
-                    min_time=$elapsed
-                    best_mirror="$mirror"
-                fi
-            else
-                log_warn "  $mirror: UNREACHABLE"
-            fi
-        fi
-    done
-    
-    log_ok "Selected npm mirror: $best_mirror"
-    echo "$best_mirror"
-}
-
-# Select fastest GitHub API mirror
-select_fastest_github_mirror() {
-    log_info "Testing GitHub mirrors for best speed..."
-    
-    local best_mirror="${GITHUB_MIRRORS[0]}"
-    local min_time=9999
-    
-    for mirror in "${GITHUB_MIRRORS[@]}"; do
-        local start_time end_time elapsed
-        start_time=$(date +%s%N 2>/dev/null || echo "$(date +%s)000000000")
-        
-        # Test API availability
-        if command_exists curl; then
-            if curl -fsSL --max-time 5 "$mirror/repos/anthropics/claude-code/releases/latest" >/dev/null 2>&1; then
-                end_time=$(date +%s%N 2>/dev/null || echo "$(date +%s)000000000")
-                elapsed=$(( (end_time - start_time) / 1000000 ))
-                
-                log_info "  $mirror: ${elapsed}ms"
-                
-                if [ "$elapsed" -lt "$min_time" ]; then
-                    min_time=$elapsed
-                    best_mirror="$mirror"
-                fi
-            else
-                log_warn "  $mirror: UNREACHABLE"
-            fi
-        fi
-    done
-    
-    log_ok "Selected GitHub mirror: $best_mirror"
-    echo "$best_mirror"
-}
+# Wrapper functions for backward compatibility
+select_fastest_node_mirror()   { select_fastest_mirror "Node.js" "${NODE_MIRRORS[@]}"; }
+select_fastest_npm_mirror()    { select_fastest_mirror "npm" "${NPM_MIRRORS[@]}"; }
+select_fastest_github_mirror() { select_fastest_mirror "GitHub" "${GITHUB_MIRRORS[@]}"; }
 
 # Get Node.js major version number
 get_node_major_version() {
@@ -1121,226 +1270,12 @@ if [ "$CONFIG_ONLY" = true ]; then
     # Step 4: Generate Config Files (inline for CONFIG_ONLY mode)
     echo "Step 2/2: Generating configuration files..."
 
-    # --- settings.json ---
-    SETTINGS_FILE="$USER_CLAUDE_DIR/settings.json"
-    if [ -f "$SETTINGS_FILE" ]; then
-        BACKUP_NAME="settings.json.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$SETTINGS_FILE" "$USER_CLAUDE_DIR/backups/$BACKUP_NAME"
-        log_warn "settings.json already exists. Backed up to backups/$BACKUP_NAME"
-    else
-        cat > "$SETTINGS_FILE" << 'SETTINGSJSON'
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "YOUR_BASE_URL_HERE",
-    "ANTHROPIC_API_KEY": "YOUR_API_KEY_HERE",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "YOUR_MODEL_HERE",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "YOUR_MODEL_HERE",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "YOUR_MODEL_HERE",
-    "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_SKIP_FIRST_RUN": "1",
-    "CLAUDE_CODE_TELEMETRY": "0",
-    "DISABLE_TELEMETRY": "1",
-    "CLAUDE_CODE_WEB_FETCH_SKIP_SAFETY_CHECK": "1"
-  },
-  "autoUpdate": { "enabled": false },
-  "hasCompletedOnboarding": true,
-  "skipOnboarding": true,
-  "telemetry": { "enabled": false }
-}
-SETTINGSJSON
-        log_ok "Created settings.json with placeholder values"
-    fi
-
-    # --- config.json ---
-    CONFIG_FILE="$USER_CLAUDE_DIR/config.json"
-    if [ -f "$CONFIG_FILE" ]; then
-        log_ok "config.json already exists"
-    else
-        cat > "$CONFIG_FILE" << 'CONFIGJSON'
-{ "primaryApiKey": "mimo" }
-CONFIGJSON
-        log_ok "Created config.json"
-    fi
-
-    # --- .claude.json ---
-    CLAUDE_JSON="$HOME/.claude.json"
-    FIRST_START=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-
-    if [ -f "$CLAUDE_JSON" ]; then
-        BACKUP_NAME=".claude.json.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$CLAUDE_JSON" "$USER_CLAUDE_DIR/backups/$BACKUP_NAME"
-
-        if command_exists python3; then
-            python3 -c "
-import json, sys
-try:
-    with open('$CLAUDE_JSON', 'r') as f:
-        data = json.load(f)
-    data['hasCompletedOnboarding'] = True
-    with open('$CLAUDE_JSON', 'w') as f:
-        json.dump(data, f, indent=2)
-except Exception as e:
-    pass
-" 2>/dev/null || true
-        elif command_exists jq; then
-            jq '.hasCompletedOnboarding = true' "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON" 2>/dev/null || true
-        fi
-        log_ok "Updated .claude.json (backed up to backups/$BACKUP_NAME)"
-    else
-        cat > "$CLAUDE_JSON" << CLAUDEJSON
-{
-  "hasCompletedOnboarding": true,
-  "firstStartTime": "$FIRST_START",
-  "skipOnboarding": true,
-  "onboardingCompleted": true,
-  "hasSeenInitialMessage": true,
-  "hasAcceptedTerms": true,
-  "telemetry": {
-    "enabled": false,
-    "consentGiven": false
-  },
-  "regionCheck": {
-    "bypassed": true,
-    "checkedAt": "$FIRST_START"
-  }
-}
-CLAUDEJSON
-        log_ok "Created .claude.json"
-    fi
-
-    # --- claude-wrapper.sh ---
-    CLAUDE_WRAPPER="$USER_CLAUDE_DIR/claude-wrapper.sh"
-    cat > "$CLAUDE_WRAPPER" << 'WRAPPER'
-#!/usr/bin/env bash
-# Claude Code Wrapper Script
-# This script sets up necessary environment variables to bypass region checks
-
-# 禁用自动更新
-export DISABLE_AUTOUPDATER=1
-
-# 禁用遥测
-export CLAUDE_CODE_TELEMETRY=0
-export DISABLE_TELEMETRY=1
-
-# 跳过首次运行检查
-export CLAUDE_CODE_SKIP_FIRST_RUN=1
-
-# 跳过引导流程
-export CLAUDE_CODE_SKIP_ONBOARDING=1
-
-# 禁用 Web Tool 的域名安全检查（离线环境下无法连接 claude.ai 验证）
-# 这样 Web Tool 会直接获取网页内容而不需要安全检查
-export CLAUDE_CODE_WEB_FETCH_SKIP_SAFETY_CHECK=1
-
-# 设置 API 配置（如果用户已配置）
-if [ -f "$HOME/.claude/settings.json" ]; then
-    # Try to read API configuration from settings.json
-    if command -v jq >/dev/null 2>&1; then
-        BASE_URL=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$HOME/.claude/settings.json" 2>/dev/null)
-        API_KEY=$(jq -r '.env.ANTHROPIC_API_KEY // empty' "$HOME/.claude/settings.json" 2>/dev/null)
-        [ -n "$BASE_URL" ] && export ANTHROPIC_BASE_URL="$BASE_URL"
-        [ -n "$API_KEY" ] && export ANTHROPIC_API_KEY="$API_KEY"
-    fi
-fi
-
-# Execute original claude command
-exec claude "$@"
-WRAPPER
-    chmod +x "$CLAUDE_WRAPPER"
-    log_ok "Created claude-wrapper.sh"
-
-    # --- clean-tmp.sh ---
-    CLEAN_TMP_SCRIPT="$USER_CLAUDE_DIR/clean-tmp.sh"
-    cat > "$CLEAN_TMP_SCRIPT" << 'CLEANTMP'
-#!/usr/bin/env bash
-# Clean Claude Code tmp directory
-
-TMPDIR="$HOME/.claude/tmp"
-
-echo "Claude Code TMP Directory Cleaner"
-echo "=================================="
-echo ""
-
-if [ ! -d "$TMPDIR" ]; then
-    echo "TMP directory does not exist: $TMPDIR"
-    exit 0
-fi
-
-# Show current size
-SIZE=$(du -sh "$TMPDIR" 2>/dev/null | cut -f1)
-echo "Current TMP directory size: $SIZE"
-echo ""
-
-# Count files
-FILE_COUNT=$(find "$TMPDIR" -type f 2>/dev/null | wc -l)
-echo "Number of files: $FILE_COUNT"
-echo ""
-
-read -p "Do you want to clean the TMP directory? [y/N]: " -n 1 -r
-echo ""
-
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Cleanup cancelled."
-    exit 0
-fi
-
-echo ""
-echo "Select cleanup option:"
-echo "  1) Clean items older than 7 days"
-echo "  2) Clean items older than 3 days"
-echo "  3) Clean everything"
-echo ""
-read -p "Select option [1-3]: " -r option
-
-case $option in
-    1)
-        FIND_MTIME=7
-        ;;
-    2)
-        FIND_MTIME=3
-        ;;
-    3)
-        FIND_MTIME=0
-        ;;
-    *)
-        echo "Invalid option. Cancelling."
-        exit 1
-        ;;
-esac
-
-# Show what will be deleted
-echo ""
-echo "The following items will be deleted:"
-if [ "$FIND_MTIME" -eq 0 ]; then
-    find "$TMPDIR" -mindepth 1 -exec ls -ld {} \;
-else
-    find "$TMPDIR" -mindepth 1 -mtime +$FIND_MTIME -exec ls -ld {} \;
-fi
-
-echo ""
-read -p "Confirm deletion? [y/N]: " -n 1 -r
-echo ""
-
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Cleanup cancelled."
-    exit 0
-fi
-
-# Perform cleanup
-if [ "$FIND_MTIME" -eq 0 ]; then
-    rm -rf "$TMPDIR"/*
-    rm -rf "$TMPDIR"/.* 2>/dev/null || true
-else
-    find "$TMPDIR" -mindepth 1 -mtime +$FIND_MTIME -delete
-fi
-
-NEW_SIZE=$(du -sh "$TMPDIR" 2>/dev/null | cut -f1)
-echo ""
-echo "Cleanup complete. New size: $NEW_SIZE"
-CLEANTMP
-    chmod +x "$CLEAN_TMP_SCRIPT"
-    log_ok "Created clean-tmp.sh"
+    # Generate config files using shared functions
+    generate_settings_json
+    generate_config_json
+    generate_claude_json
+    generate_claude_wrapper
+    generate_clean_tmp
 
     echo ""
     echo "============================================================================="
@@ -1740,135 +1675,14 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "Step 4/7: Generating configuration files..."
 
-# --- settings.json ---
-SETTINGS_FILE="$USER_CLAUDE_DIR/settings.json"
-if [ -f "$SETTINGS_FILE" ]; then
-    BACKUP_NAME="settings.json.backup.$(date +%Y%m%d_%H%M%S)"
-    cp "$SETTINGS_FILE" "$USER_CLAUDE_DIR/backups/$BACKUP_NAME"
-    log_warn "settings.json already exists. Backed up to backups/$BACKUP_NAME"
-else
-    cat > "$SETTINGS_FILE" << 'SETTINGSJSON'
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "YOUR_BASE_URL_HERE",
-    "ANTHROPIC_API_KEY": "YOUR_API_KEY_HERE",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "YOUR_MODEL_HERE",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "YOUR_MODEL_HERE",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "YOUR_MODEL_HERE",
-    "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_SKIP_FIRST_RUN": "1",
-    "CLAUDE_CODE_TELEMETRY": "0",
-    "DISABLE_TELEMETRY": "1",
-    "CLAUDE_CODE_WEB_FETCH_SKIP_SAFETY_CHECK": "1"
-  },
-  "autoUpdate": { "enabled": false },
-  "hasCompletedOnboarding": true,
-  "skipOnboarding": true,
-  "telemetry": { "enabled": false }
-}
-SETTINGSJSON
-    log_ok "Created settings.json with placeholder values"
-fi
+# Generate config files using shared functions
+generate_settings_json
+generate_config_json
+generate_claude_json
+generate_claude_wrapper
 
-# --- config.json ---
-CONFIG_FILE="$USER_CLAUDE_DIR/config.json"
-if [ -f "$CONFIG_FILE" ]; then
-    log_ok "config.json already exists"
-else
-    cat > "$CONFIG_FILE" << 'CONFIGJSON'
-{ "primaryApiKey": "mimo" }
-CONFIGJSON
-    log_ok "Created config.json"
-fi
-
-# --- .claude.json ---
-CLAUDE_JSON="$HOME/.claude.json"
-FIRST_START=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-
-if [ -f "$CLAUDE_JSON" ]; then
-    BACKUP_NAME=".claude.json.backup.$(date +%Y%m%d_%H%M%S)"
-    cp "$CLAUDE_JSON" "$USER_CLAUDE_DIR/backups/$BACKUP_NAME"
-    
-    if command_exists python3; then
-        python3 -c "
-import json, sys
-try:
-    with open('$CLAUDE_JSON', 'r') as f:
-        data = json.load(f)
-    data['hasCompletedOnboarding'] = True
-    with open('$CLAUDE_JSON', 'w') as f:
-        json.dump(data, f, indent=2)
-except Exception as e:
-    pass
-" 2>/dev/null || true
-    elif command_exists jq; then
-        jq '.hasCompletedOnboarding = true' "$CLAUDE_JSON" > "$CLAUDE_JSON.tmp" && mv "$CLAUDE_JSON.tmp" "$CLAUDE_JSON" 2>/dev/null || true
-    fi
-    log_ok "Updated .claude.json (backed up to backups/$BACKUP_NAME)"
-else
-    cat > "$CLAUDE_JSON" << CLAUDEJSON
-{
-  "hasCompletedOnboarding": true,
-  "firstStartTime": "$FIRST_START",
-  "skipOnboarding": true,
-  "onboardingCompleted": true,
-  "hasSeenInitialMessage": true,
-  "hasAcceptedTerms": true,
-  "telemetry": {
-    "enabled": false,
-    "consentGiven": false
-  },
-  "regionCheck": {
-    "bypassed": true,
-    "checkedAt": "$FIRST_START"
-  }
-}
-CLAUDEJSON
-    log_ok "Created .claude.json"
-fi
-
-# --- claude-wrapper.sh (wrapper script for bypassing region restrictions) ---
+# Add wrapper to PATH (in .bashrc) - only in normal mode, not --config-only
 CLAUDE_WRAPPER="$USER_CLAUDE_DIR/claude-wrapper.sh"
-cat > "$CLAUDE_WRAPPER" << 'WRAPPER'
-#!/usr/bin/env bash
-# Claude Code Wrapper Script
-# This script sets up necessary environment variables to bypass region checks
-
-# 禁用自动更新
-export DISABLE_AUTOUPDATER=1
-
-# 禁用遥测
-export CLAUDE_CODE_TELEMETRY=0
-export DISABLE_TELEMETRY=1
-
-# 跳过首次运行检查
-export CLAUDE_CODE_SKIP_FIRST_RUN=1
-
-# 跳过引导流程
-export CLAUDE_CODE_SKIP_ONBOARDING=1
-
-# 禁用 Web Tool 的域名安全检查（离线环境下无法连接 claude.ai 验证）
-# 这样 Web Tool 会直接获取网页内容而不需要安全检查
-export CLAUDE_CODE_WEB_FETCH_SKIP_SAFETY_CHECK=1
-
-# 设置 API 配置（如果用户已配置）
-if [ -f "$HOME/.claude/settings.json" ]; then
-    # Try to read API configuration from settings.json
-    if command -v jq >/dev/null 2>&1; then
-        BASE_URL=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$HOME/.claude/settings.json" 2>/dev/null)
-        API_KEY=$(jq -r '.env.ANTHROPIC_API_KEY // empty' "$HOME/.claude/settings.json" 2>/dev/null)
-        [ -n "$BASE_URL" ] && export ANTHROPIC_BASE_URL="$BASE_URL"
-        [ -n "$API_KEY" ] && export ANTHROPIC_API_KEY="$API_KEY"
-    fi
-fi
-
-# Execute original claude command
-exec claude "$@"
-WRAPPER
-chmod +x "$CLAUDE_WRAPPER"
-
-# Add wrapper to PATH (in .bashrc)
 if ! grep -q "claude-wrapper" "$BASHRC" 2>/dev/null; then
     cat >> "$BASHRC" << WRAPPER_ALIAS
 
@@ -1878,96 +1692,7 @@ WRAPPER_ALIAS
     log_ok "Added claude wrapper alias to .bashrc"
 fi
 
-# --- clean-tmp.sh ---
-CLEAN_TMP_SCRIPT="$USER_CLAUDE_DIR/clean-tmp.sh"
-cat > "$CLEAN_TMP_SCRIPT" << 'CLEANTMP'
-#!/usr/bin/env bash
-# Clean Claude Code tmp directory
-
-TMPDIR="$HOME/.claude/tmp"
-
-echo "Claude Code TMP Directory Cleaner"
-echo "=================================="
-echo ""
-
-if [ ! -d "$TMPDIR" ]; then
-    echo "TMP directory does not exist: $TMPDIR"
-    exit 0
-fi
-
-# Show current size
-SIZE=$(du -sh "$TMPDIR" 2>/dev/null | cut -f1)
-echo "Current TMP directory size: $SIZE"
-echo ""
-
-# Count files
-FILE_COUNT=$(find "$TMPDIR" -type f 2>/dev/null | wc -l)
-echo "Number of files: $FILE_COUNT"
-echo ""
-
-read -p "Do you want to clean the TMP directory? [y/N]: " -n 1 -r
-echo ""
-
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Cleanup cancelled."
-    exit 0
-fi
-
-echo ""
-echo "Select cleanup option:"
-echo "  1) Clean items older than 7 days"
-echo "  2) Clean items older than 3 days"
-echo "  3) Clean everything"
-echo ""
-read -p "Select option [1-3]: " -r option
-
-case $option in
-    1)
-        FIND_MTIME=7
-        ;;
-    2)
-        FIND_MTIME=3
-        ;;
-    3)
-        FIND_MTIME=0
-        ;;
-    *)
-        echo "Invalid option. Cancelling."
-        exit 1
-        ;;
-esac
-
-# Show what will be deleted
-echo ""
-echo "The following items will be deleted:"
-if [ "$FIND_MTIME" -eq 0 ]; then
-    find "$TMPDIR" -mindepth 1 -exec ls -ld {} \;
-else
-    find "$TMPDIR" -mindepth 1 -mtime +$FIND_MTIME -exec ls -ld {} \;
-fi
-
-echo ""
-read -p "Confirm deletion? [y/N]: " -n 1 -r
-echo ""
-
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Cleanup cancelled."
-    exit 0
-fi
-
-# Perform cleanup
-if [ "$FIND_MTIME" -eq 0 ]; then
-    rm -rf "$TMPDIR"/*
-    rm -rf "$TMPDIR"/.* 2>/dev/null || true
-else
-    find "$TMPDIR" -mindepth 1 -mtime +$FIND_MTIME -delete
-fi
-
-NEW_SIZE=$(du -sh "$TMPDIR" 2>/dev/null | cut -f1)
-echo ""
-echo "Cleanup complete. New size: $NEW_SIZE"
-CLEANTMP
-chmod +x "$CLEAN_TMP_SCRIPT"
+generate_clean_tmp
 
 echo ""
 
@@ -2051,17 +1776,50 @@ if [ -d "$SKILLS_DIR" ] && [ -f "$SKILLS_DIR/install-skills.sh" ]; then
     # Check for jq dependency (required by install-skills.sh)
     if ! command -v jq &>/dev/null; then
         log_warn "jq is required for skills installation"
-        log_info "Attempting to install jq..."
-        if command -v apt-get &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y jq
-        elif command -v yum &>/dev/null; then
-            sudo yum install -y jq
-        elif command -v brew &>/dev/null; then
-            brew install jq
+        log_info "Attempting to use bundled jq from offline package..."
+
+        # Try bundled jq first (no sudo required)
+        local bundled_jq=""
+        local os_jq arch_jq
+        os_jq="$(uname -s)"
+        arch_jq="$(uname -m)"
+
+        case "$os_jq" in
+            Linux*)
+                case "$arch_jq" in
+                    x86_64|amd64)   bundled_jq="${OFFLINE_PACKAGES}/tools/jq/linux-amd64/jq" ;;
+                    aarch64|arm64)   bundled_jq="${OFFLINE_PACKAGES}/tools/jq/linux-arm64/jq" ;;
+                esac
+                ;;
+            Darwin*)
+                case "$arch_jq" in
+                    x86_64|amd64)   bundled_jq="${OFFLINE_PACKAGES}/tools/jq/macos-amd64/jq" ;;
+                    arm64)           bundled_jq="${OFFLINE_PACKAGES}/tools/jq/macos-arm64/jq" ;;
+                esac
+                ;;
+        esac
+
+        if [ -n "$bundled_jq" ] && [ -x "$bundled_jq" ]; then
+            # Create a temporary jq in PATH so command -v jq succeeds
+            local tmp_jq_dir
+            tmp_jq_dir=$(mktemp -d)
+            ln -sf "$bundled_jq" "$tmp_jq_dir/jq"
+            export PATH="$tmp_jq_dir:$PATH"
+            log_ok "Using bundled jq from offline package (no sudo required): $bundled_jq"
         else
-            log_error "Could not install jq automatically"
-            log_info "Please install jq manually and run: bash $SKILLS_DIR/install-skills.sh $SKILLS_DIR/offline-skills"
-            SKILLS_DIR=""  # Skip installation
+            # Fallback: try to install system jq (requires sudo)
+            log_info "No bundled jq found for ${os_jq}/${arch_jq}, attempting system install..."
+            if command -v apt-get &>/dev/null; then
+                sudo apt-get update && sudo apt-get install -y jq
+            elif command -v yum &>/dev/null; then
+                sudo yum install -y jq
+            elif command -v brew &>/dev/null; then
+                brew install jq
+            else
+                log_error "Could not install jq automatically"
+                log_info "Please install jq manually and run: bash $SKILLS_DIR/install-skills.sh $SKILLS_DIR/offline-skills"
+                SKILLS_DIR=""  # Skip installation
+            fi
         fi
     fi
 
