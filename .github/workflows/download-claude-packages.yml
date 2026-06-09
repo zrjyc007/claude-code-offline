@@ -158,23 +158,29 @@ jobs:
           # Download optional dependencies that may be needed
           echo "=== Downloading additional dependencies ==="
 
-          # Helper: pack and rename tarball to short name
+          # Helper: pack and rename tarball
+          # Usage: pack_rename <npm-package> <source-prefix> [target-prefix]
+          # Example: pack_rename "@img/sharp-linux-x64" "img-sharp-linux-x64" "sharp-linux-x64"
           pack_rename() {
             local pkg="$1"
-            local prefix="$2"
+            local src_prefix="$2"
+            local dst_prefix="${3:-$src_prefix}"
             npm pack "$pkg" --pack-destination . 2>/dev/null || { echo "$pkg not available"; return; }
             local orig
-            orig=$(ls -t "${prefix}"-*.tgz 2>/dev/null | head -1 || true)
+            orig=$(ls -t "${src_prefix}"-*.tgz 2>/dev/null | head -1 || true)
             if [ -n "$orig" ]; then
               local ver
-              ver=$(echo "$orig" | sed "s/${prefix}-//" | sed 's/.tgz//')
-              mv "$orig" "${prefix}-${ver}.tgz"
+              ver=$(echo "$orig" | sed "s/${src_prefix}-//" | sed 's/.tgz//')
+              local dst="${dst_prefix}-${ver}.tgz"
+              if [ "$orig" != "$dst" ]; then
+                mv "$orig" "$dst"
+              fi
             fi
           }
 
-          pack_rename "@img/sharp-linux-x64" "img-sharp-linux-x64"
-          pack_rename "@img/sharp-libvips-linux-x64" "img-sharp-libvips-linux-x64"
-          pack_rename "@musistudio/claude-code-router" "musistudio-claude-code-router"
+          pack_rename "@img/sharp-linux-x64" "img-sharp-linux-x64" "sharp-linux-x64"
+          pack_rename "@img/sharp-libvips-linux-x64" "img-sharp-libvips-linux-x64" "sharp-libvips-linux-x64"
+          pack_rename "@musistudio/claude-code-router" "musistudio-claude-code-router" "claude-code-router"
 
           echo "=== Downloaded packages (renamed to match 7z format) ==="
           ls -la *.tgz
