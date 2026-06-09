@@ -17,91 +17,11 @@ CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
 CLAUDE_PLUGINS_DIR="${HOME}/.claude/plugins"
 MANIFEST_FILE="${SKILLS_SOURCE}/skills-manifest.json"
 
-# jq command - use system jq if available, otherwise use bundled jq
+# Source common utilities
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# jq command - will be set by init_jq
 JQ_CMD=""
-
-# Initialize jq command
-init_jq() {
-    # Check if system jq is available
-    if command -v jq &> /dev/null; then
-        JQ_CMD="jq"
-        log_info "Using system jq: $(which jq)"
-        return 0
-    fi
-
-    # Check for bundled jq in script directory
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local bundled_jq=""
-
-    # Detect platform and architecture
-    local os
-    local arch
-    os="$(uname -s)"
-    arch="$(uname -m)"
-
-    case "$os" in
-        Linux*)
-            case "$arch" in
-                x86_64|amd64)   bundled_jq="${script_dir}/bin/linux-amd64/jq" ;;
-                aarch64|arm64)   bundled_jq="${script_dir}/bin/linux-arm64/jq" ;;
-                armv7l|armhf)    bundled_jq="${script_dir}/bin/linux-armhf/jq" ;;
-            esac
-            ;;
-        Darwin*)
-            case "$arch" in
-                x86_64|amd64)   bundled_jq="${script_dir}/bin/macos-amd64/jq" ;;
-                arm64)           bundled_jq="${script_dir}/bin/macos-arm64/jq" ;;
-            esac
-            ;;
-        CYGWIN*|MINGW*|MSYS*)
-            bundled_jq="${script_dir}/bin/windows-amd64/jq.exe"
-            ;;
-    esac
-
-    # Use bundled jq if available
-    if [ -n "$bundled_jq" ] && [ -x "$bundled_jq" ]; then
-        JQ_CMD="$bundled_jq"
-        log_info "Using bundled jq: ${bundled_jq}"
-        return 0
-    fi
-
-    # Check for jq wrapper script
-    local wrapper_script="${script_dir}/bin/jq-wrapper.sh"
-    if [ -f "$wrapper_script" ] && [ -x "$wrapper_script" ]; then
-        JQ_CMD="bash ${wrapper_script}"
-        log_info "Using jq wrapper: ${wrapper_script}"
-        return 0
-    fi
-
-    # jq not found
-    log_error "jq not found (neither system nor bundled)"
-    log_error "Please install jq or run: bash download-jq.sh --all"
-    return 1
-}
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_ok() {
-    echo -e "${GREEN}[OK]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
 
 # Check if running in correct directory
 check_source() {
@@ -305,15 +225,8 @@ install_all_skills() {
 
     # Get list of skills from manifest or directory
     if [ -f "$MANIFEST_FILE" ]; then
-        # Use manifest
-        while IFS= read -r skill_name; do
-            local skill_type
-            local offline_compatible
-            skill_type=$($JQ_CMD -r ".skills[\"${skill_name}\"].type // \"skill\"" "$MANIFEST_FILE")
-            # jq treats boolean false as falsy, so // true would replace false with true
-            # Use explicit null check instead
-            offline_compatible=$($JQ_CMD -r "if .skills[\"${skill_name}\"].offline_compatible == null then \"true\" elif .skills[\"${skill_name}\"].offline_compatible == false then \"false\" else \"true\" end" "$MANIFEST_FILE")
-
+        # Use manifest - single-pass jq to reduce process overhead
+        while IFS=$'\t' read -r skill_name skill_type offline_compatible; do
             # Skip offline-incompatible entries
             if [ "$offline_compatible" = "false" ]; then
                 log_warn "Skipping '${skill_name}' - offline_compatible=false"
@@ -334,7 +247,7 @@ install_all_skills() {
                 log_warn "Skill directory not found: ${skill_name}"
                 ((failed++)) || true
             fi
-        done < <($JQ_CMD -r '.skills | keys[]' "$MANIFEST_FILE")
+        done < <($JQ_CMD -r '.skills | to_entries[] | [.key, .value.type // "skill", (if .value.offline_compatible == null then "true" elif .value.offline_compatible == false then "false" else "true" end)] | @tsv' "$MANIFEST_FILE")
     else
         # Use directory listing - install as skills by default
         for skill_dir in "$SKILLS_SOURCE"/*/; do
