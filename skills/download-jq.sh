@@ -14,52 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/bin"
 JQ_VERSION="1.7.1"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_ok() {
-    echo -e "${GREEN}[OK]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-# Detect platform and architecture
-detect_platform() {
-    local os
-    local arch
-
-    # Detect OS
-    case "$(uname -s)" in
-        Linux*)     os="linux" ;;
-        Darwin*)    os="macos" ;;
-        CYGWIN*|MINGW*|MSYS*) os="windows" ;;
-        *)          log_error "Unsupported OS: $(uname -s)"; exit 1 ;;
-    esac
-
-    # Detect architecture
-    case "$(uname -m)" in
-        x86_64|amd64)   arch="amd64" ;;
-        aarch64|arm64)   arch="arm64" ;;
-        armv7l|armhf)    arch="armhf" ;;
-        *)               log_error "Unsupported architecture: $(uname -m)"; exit 1 ;;
-    esac
-
-    echo "${os}-${arch}"
-}
+# Source common utilities
+source "${SCRIPT_DIR}/lib/common.sh"
 
 # Download jq binary
 download_jq() {
@@ -125,10 +81,10 @@ download_jq_all_platforms() {
     mkdir -p "$output_dir/macos-arm64"
     mkdir -p "$output_dir/windows-amd64"
 
-    # Download for each platform
+    # Download for each platform in parallel
     local platforms=("linux-amd64" "linux-arm64" "macos-amd64" "macos-arm64" "windows-amd64")
-    local success=0
-    local failed=0
+    local tmp_results
+    tmp_results=$(mktemp)
 
     for platform in "${platforms[@]}"; do
         local output_path
@@ -139,16 +95,24 @@ download_jq_all_platforms() {
         fi
 
         log_info "Downloading jq for ${platform}"
-        if download_jq_for_platform "$platform" "$output_path"; then
-            ((success++)) || true
-        else
-            ((failed++)) || true
-        fi
+        (
+            if download_jq_for_platform "$platform" "$output_path"; then
+                echo "ok" >> "$tmp_results"
+            else
+                echo "fail" >> "$tmp_results"
+            fi
+        ) &
     done
+    wait
+
+    local success failed
+    success=$(grep -c "^ok$" "$tmp_results" 2>/dev/null || echo 0)
+    failed=$(grep -c "^fail$" "$tmp_results" 2>/dev/null || echo 0)
+    rm -f "$tmp_results"
 
     log_info "============================="
     log_ok "Downloaded jq for ${success} platforms"
-    if [ $failed -gt 0 ]; then
+    if [ "$failed" -gt 0 ]; then
         log_warn "Failed: ${failed} platforms"
     fi
 
