@@ -160,7 +160,7 @@ jobs:
 
           # Helper: pack and rename tarball
           # Usage: pack_rename <npm-package> <source-prefix> [target-prefix]
-          # Example: pack_rename "@img/sharp-linux-x64" "img-sharp-linux-x64" "sharp-linux-x64"
+          # Example: pack_rename "@img/sharp-win32-x64" "img-sharp-win32-x64" "sharp-win32-x64"
           pack_rename() {
             local pkg="$1"
             local src_prefix="$2"
@@ -178,8 +178,8 @@ jobs:
             fi
           }
 
-          pack_rename "@img/sharp-linux-x64" "img-sharp-linux-x64" "sharp-linux-x64"
-          pack_rename "@img/sharp-libvips-linux-x64" "img-sharp-libvips-linux-x64" "sharp-libvips-linux-x64"
+          pack_rename "@img/sharp-win32-x64" "img-sharp-win32-x64" "sharp-win32-x64"
+          pack_rename "@img/sharp-libvips-win32-x64" "img-sharp-libvips-win32-x64" "sharp-libvips-win32-x64"
           pack_rename "@musistudio/claude-code-router" "musistudio-claude-code-router" "claude-code-router"
 
           echo "=== Downloaded packages (renamed to match 7z format) ==="
@@ -206,7 +206,7 @@ jobs:
             --registry "${{ env.NPM_REGISTRY }}" 2>&1 || {
             echo "WARN: npm install failed, falling back to npm pack extraction"
             cd "$GITHUB_WORKSPACE/claude-offline-packages"
-            CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1 || true)
+            CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v win32-x64 | head -1 || true)
             mkdir -p node_modules/@anthropic-ai/claude-code
             tar -xzf "$CLAUDE_TGZ" -C node_modules/@anthropic-ai/claude-code --strip-components=1
             TEMP_DIR=""
@@ -297,24 +297,24 @@ jobs:
             tar -xzf "$ROUTER_TGZ" -C node_modules/@musistudio/claude-code-router --strip-components=1
           fi
 
-          # Extract @img/sharp-linux-x64 (if exists)
-          if ls sharp-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_TGZ=$(ls -t sharp-linux-x64-*.tgz 2>/dev/null | head -1 || true)
-            echo "Extracting: $SHARP_TGZ to node_modules/@img/sharp-linux-x64"
-            mkdir -p node_modules/@img/sharp-linux-x64
-            tar -xzf "$SHARP_TGZ" -C node_modules/@img/sharp-linux-x64 --strip-components=1
+          # Extract @img/sharp-win32-x64 (if exists)
+          if ls sharp-win32-x64-*.tgz 1>/dev/null 2>&1; then
+            SHARP_TGZ=$(ls -t sharp-win32-x64-*.tgz 2>/dev/null | head -1 || true)
+            echo "Extracting: $SHARP_TGZ to node_modules/@img/sharp-win32-x64"
+            mkdir -p node_modules/@img/sharp-win32-x64
+            tar -xzf "$SHARP_TGZ" -C node_modules/@img/sharp-win32-x64 --strip-components=1
           fi
 
-          # Extract @img/sharp-libvips-linux-x64 (if exists)
-          if ls sharp-libvips-linux-x64-*.tgz 1>/dev/null 2>&1; then
-            SHARP_VIPS_TGZ=$(ls -t sharp-libvips-linux-x64-*.tgz 2>/dev/null | head -1 || true)
-            echo "Extracting: $SHARP_VIPS_TGZ to node_modules/@img/sharp-libvips-linux-x64"
-            mkdir -p node_modules/@img/sharp-libvips-linux-x64
-            tar -xzf "$SHARP_VIPS_TGZ" -C node_modules/@img/sharp-libvips-linux-x64 --strip-components=1
+          # Extract @img/sharp-libvips-win32-x64 (if exists)
+          if ls sharp-libvips-win32-x64-*.tgz 1>/dev/null 2>&1; then
+            SHARP_VIPS_TGZ=$(ls -t sharp-libvips-win32-x64-*.tgz 2>/dev/null | head -1 || true)
+            echo "Extracting: $SHARP_VIPS_TGZ to node_modules/@img/sharp-libvips-win32-x64"
+            mkdir -p node_modules/@img/sharp-libvips-win32-x64
+            tar -xzf "$SHARP_VIPS_TGZ" -C node_modules/@img/sharp-libvips-win32-x64 --strip-components=1
           fi
 
           # Create package.json (for reference)
-          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v linux-x64 | head -1 || true)
+          CLAUDE_TGZ=$(ls -t claude-code-*.tgz 2>/dev/null | grep -v router | grep -v win32-x64 | head -1 || true)
           cat > package.json << EOF
           {
             "name": "claude-offline-packages",
